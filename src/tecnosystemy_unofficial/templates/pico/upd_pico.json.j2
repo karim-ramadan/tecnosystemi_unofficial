@@ -1,0 +1,30 @@
+{#
+  upd_pico.json.j2 — control command for Pico ventilation units.
+
+  Required context variables:
+    pin      (str)   Device PIN, e.g. "1234" or "-1"
+
+  Optional context variables (only fields that are defined & not None are sent):
+    on_off           (int)  1=ON, 2=OFF
+    mod              (int)  Operating mode (1=Recupero, 2=Estrazione, 3=Immissione, 4-12=Auto/Naturale)
+    speed            (int)  Fan speed
+    spd_row          (int)  Raw speed register
+    s_umd            (int)  Target humidity
+    led_on_off_breve (int)  LED state
+    night_mod        (int)  Night mode: 0=off, 1=on
+    m_crono          (int)  Crono (timer) mode
+    man_reset        (list) Manual reset array, e.g. [0, 1, 0]
+#}
+{
+  "cmd": "upd_pico",
+  "pin": "{{ pin }}"
+  {%- if on_off is defined and on_off is not none %}, "on_off": {{ on_off }}{% endif %}
+  {%- if mod is defined and mod is not none %}, "mod": {{ mod }}{% endif %}
+  {%- if speed is defined and speed is not none %}, "speed": {{ speed }}{% endif %}
+  {%- if spd_row is defined and spd_row is not none %}, "spd_row": {{ spd_row }}{% endif %}
+  {%- if s_umd is defined and s_umd is not none %}, "s_umd": {{ s_umd }}{% endif %}
+  {%- if led_on_off_breve is defined and led_on_off_breve is not none %}, "led_on_off_breve": {{ led_on_off_breve }}{% endif %}
+  {%- if night_mod is defined and night_mod is not none %}, "night_mod": {{ night_mod }}{% endif %}
+  {%- if m_crono is defined and m_crono is not none %}, "m_crono": {{ m_crono }}{% endif %}
+  {%- if man_reset is defined and man_reset is not none %}, "man_reset": {{ man_reset | tojson }}{% endif %}
+}

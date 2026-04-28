@@ -1,0 +1,438 @@
+"""
+Unit tests for the library (no real device needed).
+
+Approach: mock the UDPTransport to inject fake responses, then verify
+that TecnoClient and PicoDevice behave correctly.
+"""
+
+import json
+import threading
+import time
+from pathlib import Path
+from typing import Optional
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from tecnosystemy_unofficial import IDPManager, TecnoClient
+from tecnosystemy_unofficial.devices import PicoDevice
+from tecnosystemy_unofficial.idp import FileIDPStore, MemoryIDPStore
+from tecnosystemy_unofficial.session import CONTROL_COMMANDS, RequestSession, RequestState
+from tecnosystemy_unofficial.templates_loader import TemplateLoader
+
+
+# ---------------------------------------------------------------------------
+# IDPManager tests
+# ---------------------------------------------------------------------------
+
+
+class TestIDPManager:
+    def test_starts_at_one(self):
+        mgr = IDPManager()
+        idp = mgr.acquire()
+        assert idp == 1
+
+    def test_increments(self):
+        mgr = IDPManager()
+        mgr.acquire()  # 1, not released
+        mgr.release(1)
+        idp2 = mgr.acquire()
+        assert idp2 == 2
+
+    def test_wraps_at_max(self):
+        mgr = IDPManager()
+        mgr._store.save(IDPManager.MAX_IDP)  # next candidate = 500
+        idp = mgr.acquire()
+        assert idp == IDPManager.MAX_IDP
+        mgr.release(idp)
+        idp2 = mgr.acquire()
+        assert idp2 == 1  # wrapped
+
+    def test_skips_in_flight_on_wrap(self):
+        mgr = IDPManager()
+        # Manually mark 500 as in-flight
+        mgr._in_flight.add(IDPManager.MAX_IDP)
+        mgr._store.save(IDPManager.MAX_IDP)
+        idp = mgr.acquire()
+        assert idp == 1  # skipped 500, landed on 1
+
+    def test_thread_safety(self):
+        mgr = IDPManager()
+        results = []
+        errors = []
+
+        def worker():
+            try:
+                idp = mgr.acquire()
+                time.sleep(0.01)
+                results.append(idp)
+                mgr.release(idp)
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=worker) for _ in range(20)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors
+        assert len(set(results)) == len(results), "Duplicate IDPs allocated"
+
+    def test_raises_when_all_in_flight(self):
+        mgr = IDPManager()
+        mgr._in_flight = set(range(1, IDPManager.MAX_IDP + 1))
+        with pytest.raises(RuntimeError, match="in-flight"):
+            mgr.acquire()
+
+
+class TestFileIDPStore:
+    def test_persists_and_reads(self, tmp_path):
+        path = tmp_path / "idp.json"
+        store = FileIDPStore(path)
+        assert store.get() == 1  # default
+        store.save(42)
+        store2 = FileIDPStore(path)
+        assert store2.get() == 42
+
+    def test_handles_corrupt_file(self, tmp_path):
+        path = tmp_path / "idp.json"
+        path.write_text("not json")
+        store = FileIDPStore(path)
+        assert store.get() == 1
+
+    def test_file_idp_manager(self, tmp_path):
+        path = tmp_path / "idp.json"
+        mgr = IDPManager(backend="file", path=path)
+        idp = mgr.acquire()
+        assert idp == 1
+        mgr.release(idp)
+        # Next session reads from file
+        mgr2 = IDPManager(backend="file", path=path)
+        idp2 = mgr2.acquire()
+        assert idp2 == 2
+
+
+# ---------------------------------------------------------------------------
+# RequestSession tests
+# ---------------------------------------------------------------------------
+
+
+class TestRequestSession:
+    def test_control_command_completes_on_ack(self):
+        cmd = next(iter(CONTROL_COMMANDS))  # any control command
+        session = RequestSession(idp=1, command=cmd)
+        assert not session.expects_data
+
+        session.handle_packet({"idp": 1, "res": 99})
+        assert session.state == RequestState.COMPLETED
+        assert session.response is not None
+
+    def test_info_command_waits_for_data_after_ack(self):
+        session = RequestSession(idp=1, command="stato_sync")
+        assert session.expects_data
+
+        session.handle_packet({"idp": 1, "res": 99})
+        assert session.state == RequestState.WAITING_FINAL
+
+        session.handle_packet({"idp": 1, "res": 1, "on_off": 1})
+        assert session.state == RequestState.COMPLETED
+        assert session.response["on_off"] == 1
+
+    def test_data_without_prior_ack_completes(self):
+        """Device may skip the res:99 ACK in some edge cases."""
+        session = RequestSession(idp=1, command="pico_info")
+        session.handle_packet({"idp": 1, "res": 1, "ser": "ABC"})
+        assert session.state == RequestState.COMPLETED
+
+    def test_wait_returns_none_on_timeout(self):
+        session = RequestSession(idp=1, command="stato_sync")
+        result = session.wait(timeout=0.05)
+        assert result is None
+        assert session.state == RequestState.TIMED_OUT
+
+    def test_wait_returns_response_when_ready(self):
+        session = RequestSession(idp=1, command="pico_info")
+        threading.Timer(0.02, lambda: session.handle_packet({"idp": 1, "res": 1})).start()
+        result = session.wait(timeout=1.0)
+        assert result is not None
+
+    def test_all_packets_stored(self):
+        session = RequestSession(idp=1, command="stato_sync")
+        session.handle_packet({"idp": 1, "res": 99})
+        session.handle_packet({"idp": 1, "res": 1, "speed": 3})
+        assert len(session.all_packets) == 2
+
+
+# ---------------------------------------------------------------------------
+# TemplateLoader tests
+# ---------------------------------------------------------------------------
+
+
+class TestTemplateLoader:
+    def test_list_bundled_templates(self):
+        loader = TemplateLoader()
+        templates = loader.list_templates()
+        assert "pico/pico_info.json.j2" in templates
+        assert "pico/stato_sync.json.j2" in templates
+        assert "pico/upd_pico.json.j2" in templates
+        assert "pico/check_pin.json.j2" in templates
+
+    def test_render_pico_info(self):
+        loader = TemplateLoader()
+        rendered = loader.render("pico/pico_info.json.j2")
+        payload = json.loads(rendered)
+        assert payload["cmd"] == "pico_info"
+        assert payload["pin"] == "-1"
+
+    def test_render_stato_sync(self):
+        loader = TemplateLoader()
+        rendered = loader.render("pico/stato_sync.json.j2", pin="1234")
+        payload = json.loads(rendered)
+        assert payload["cmd"] == "stato_sync"
+        assert payload["pin"] == "1234"
+
+    def test_render_upd_pico_with_optional_fields(self):
+        loader = TemplateLoader()
+        rendered = loader.render("pico/upd_pico.json.j2", pin="1234", on_off=1, speed=3)
+        payload = json.loads(rendered)
+        assert payload["cmd"] == "upd_pico"
+        assert payload["on_off"] == 1
+        assert payload["speed"] == 3
+        assert "mod" not in payload
+        assert "s_umd" not in payload
+
+    def test_render_upd_pico_all_fields(self):
+        loader = TemplateLoader()
+        rendered = loader.render(
+            "pico/upd_pico.json.j2",
+            pin="1234",
+            on_off=1,
+            mod=2,
+            speed=3,
+            spd_row=100,
+            s_umd=50,
+            led_on_off_breve=1,
+            night_mod=0,
+            m_crono=0,
+            man_reset=[0, 1, 0],
+        )
+        payload = json.loads(rendered)
+        assert payload["man_reset"] == [0, 1, 0]
+        assert payload["spd_row"] == 100
+
+    def test_render_upd_pico_minimal(self):
+        loader = TemplateLoader()
+        rendered = loader.render("pico/upd_pico.json.j2", pin="-1")
+        payload = json.loads(rendered)
+        assert set(payload.keys()) == {"cmd", "pin"}
+
+    def test_custom_template_dir_takes_priority(self, tmp_path):
+        custom = tmp_path / "pico"
+        custom.mkdir()
+        (custom / "pico_info.json.j2").write_text('{"cmd": "custom_pico_info", "pin": "-1"}')
+        loader = TemplateLoader(extra_dirs=[tmp_path])
+        rendered = loader.render("pico/pico_info.json.j2")
+        payload = json.loads(rendered)
+        assert payload["cmd"] == "custom_pico_info"
+
+
+# ---------------------------------------------------------------------------
+# TecnoClient + PicoDevice tests (transport mocked)
+# ---------------------------------------------------------------------------
+
+
+def _make_client_with_fake_transport(responses: dict[str, dict]):
+    """
+    Create a TecnoClient whose transport is mocked.
+
+    ``responses`` maps command names to the response dict the fake device
+    should return.  For control commands, returns res:99.  For info commands,
+    returns res:99 then the response.
+    """
+    client = TecnoClient.__new__(TecnoClient)
+    client.ip = "192.168.4.1"
+    client.timeout = 2.0
+
+    from tecnosystemy_unofficial.idp import IDPManager
+    from tecnosystemy_unofficial.session import RequestSession, CONTROL_COMMANDS
+    from tecnosystemy_unofficial.templates_loader import TemplateLoader
+    import threading
+
+    client.idp_manager = IDPManager()
+    client.template_loader = TemplateLoader()
+    client._sessions: dict[int, RequestSession] = {}
+    client._sessions_lock = threading.Lock()
+
+    send_calls = []
+
+    def fake_send(data: bytes):
+        payload = json.loads(data.decode())
+        send_calls.append(payload)
+        idp = payload.get("idp")
+        cmd = payload.get("cmd", "")
+        frm = payload.get("frm", "")
+
+        if frm == "app" and idp is not None and "res" not in payload:
+            # This is a real command (not an ACK)
+            resp = responses.get(cmd)
+            if resp is not None:
+                full_resp = {"idp": idp, "frm": "mst", **resp}
+
+                def _deliver():
+                    time.sleep(0.02)
+                    with client._sessions_lock:
+                        session = client._sessions.get(idp)
+                    if session:
+                        if session.expects_data:
+                            session.handle_packet({"idp": idp, "frm": "mst", "res": 99})
+                            time.sleep(0.01)
+                        session.handle_packet(full_resp)
+
+                threading.Thread(target=_deliver, daemon=True).start()
+
+    mock_transport = MagicMock()
+    mock_transport.send.side_effect = fake_send
+    client.transport = mock_transport
+
+    return client, send_calls
+
+
+class TestTecnoClientWithMock:
+    def test_send_info_command(self):
+        client, _ = _make_client_with_fake_transport(
+            {"pico_info": {"res": 1, "ser": "TS001", "fw_ver": "1.2.3"}}
+        )
+        result = client.send_command({"cmd": "pico_info", "pin": "-1"})
+        assert result is not None
+        assert result["ser"] == "TS001"
+
+    def test_send_control_command(self):
+        client, _ = _make_client_with_fake_transport(
+            {"upd_pico": {"res": 99}}
+        )
+        result = client.send_command({"cmd": "upd_pico", "pin": "1234", "on_off": 1})
+        assert result is not None
+        assert result["res"] == 99
+
+    def test_timeout_returns_none(self):
+        client, _ = _make_client_with_fake_transport({})
+        result = client.send_command({"cmd": "pico_info", "pin": "-1"}, timeout=0.1)
+        assert result is None
+
+    def test_send_template(self):
+        client, sent = _make_client_with_fake_transport(
+            {"upd_pico": {"res": 99}}
+        )
+        result = client.send_template("pico/upd_pico.json.j2", pin="1234", on_off=1)
+        assert result is not None
+        cmd_sent = next(p for p in sent if p.get("cmd") == "upd_pico")
+        assert cmd_sent["on_off"] == 1
+        assert "idp" in cmd_sent
+        assert cmd_sent["frm"] == "app"
+
+    def test_idp_increments_across_commands(self):
+        client, sent = _make_client_with_fake_transport(
+            {"pico_info": {"res": 1, "ser": "X"}}
+        )
+        client.send_command({"cmd": "pico_info", "pin": "-1"})
+        client.send_command({"cmd": "pico_info", "pin": "-1"})
+        # Exclude ACK packets (they also carry cmd but have "res" set)
+        idps = [p["idp"] for p in sent if p.get("cmd") == "pico_info" and "res" not in p]
+        assert idps[0] != idps[1]
+
+    def test_ack_sent_for_data_response(self):
+        client, sent = _make_client_with_fake_transport(
+            {"pico_info": {"res": 1, "ser": "X"}}
+        )
+        client.send_command({"cmd": "pico_info", "pin": "-1"})
+        acks = [p for p in sent if p.get("res") == 99]
+        assert len(acks) >= 1
+
+
+class TestPicoDevice:
+    def _make_pico(self, responses=None):
+        responses = responses or {}
+        client, sent = _make_client_with_fake_transport(responses)
+        pico = PicoDevice(client, pin="9999")
+        return pico, sent
+
+    def test_get_info(self):
+        pico, _ = self._make_pico({"pico_info": {"res": 1, "ser": "ABC", "name": "Pico1"}})
+        info = pico.get_info()
+        assert info["ser"] == "ABC"
+
+    def test_get_state(self):
+        pico, _ = self._make_pico(
+            {"stato_sync": {"res": 1, "on_off": 1, "speed": 3, "AMB_tmpr": 22}}
+        )
+        state = pico.get_state()
+        assert state["speed"] == 3
+        assert state["AMB_tmpr"] == 22
+
+    def test_turn_on(self):
+        pico, sent = self._make_pico({"upd_pico": {"res": 99}})
+        assert pico.turn_on() is True
+        cmd = next(p for p in sent if p.get("cmd") == "upd_pico")
+        assert cmd["on_off"] == 1
+        assert cmd["pin"] == "9999"
+
+    def test_turn_off(self):
+        pico, sent = self._make_pico({"upd_pico": {"res": 99}})
+        assert pico.turn_off() is True
+        cmd = next(p for p in sent if p.get("cmd") == "upd_pico")
+        assert cmd["on_off"] == 2
+
+    def test_set_speed(self):
+        pico, sent = self._make_pico({"upd_pico": {"res": 99}})
+        assert pico.set_speed(3, speed_raw=100) is True
+        cmd = next(p for p in sent if p.get("cmd") == "upd_pico")
+        assert cmd["speed"] == 3
+        assert cmd["spd_row"] == 100
+
+    def test_set_mode(self):
+        pico, sent = self._make_pico({"upd_pico": {"res": 99}})
+        assert pico.set_mode(2, on_off=1) is True
+        cmd = next(p for p in sent if p.get("cmd") == "upd_pico")
+        assert cmd["mod"] == 2
+        assert cmd["on_off"] == 1
+
+    def test_set_humidity(self):
+        pico, sent = self._make_pico({"upd_pico": {"res": 99}})
+        pico.set_humidity(60)
+        cmd = next(p for p in sent if p.get("cmd") == "upd_pico")
+        assert cmd["s_umd"] == 60
+
+    def test_set_night_mode(self):
+        pico, sent = self._make_pico({"upd_pico": {"res": 99}})
+        pico.set_night_mode(True)
+        cmd = next(p for p in sent if p.get("cmd") == "upd_pico")
+        assert cmd["night_mod"] == 1
+
+    def test_check_pin_valid(self):
+        pico, _ = self._make_pico({"check_pin": {"res": 1}})
+        assert pico.check_pin() is True
+
+    def test_check_pin_invalid(self):
+        pico, _ = self._make_pico({"check_pin": {"res": 0}})
+        assert pico.check_pin() is False
+
+    def test_update_multiple_fields(self):
+        pico, sent = self._make_pico({"upd_pico": {"res": 99}})
+        pico.update(on_off=1, speed=5, mod=3)
+        cmd = next(p for p in sent if p.get("cmd") == "upd_pico")
+        assert cmd["on_off"] == 1
+        assert cmd["speed"] == 5
+        assert cmd["mod"] == 3
+
+    def test_turn_on_returns_false_on_timeout(self):
+        pico, _ = self._make_pico({})
+        # No response configured → timeout
+        result = pico.turn_on(timeout=0.1)
+        assert result is False
+
+    def test_send_template_injects_pin(self):
+        pico, sent = self._make_pico({"upd_pico": {"res": 99}})
+        pico.send_template("pico/upd_pico.json.j2", on_off=1)
+        cmd = next(p for p in sent if p.get("cmd") == "upd_pico")
+        assert cmd["pin"] == "9999"

@@ -1,0 +1,44 @@
+[project]
+name = "tecnosystemy-unofficial"
+version = "0.1.0"
+description = "Unofficial Python library for controlling Tecnosystemi devices (Pico, etc.) via UDP"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "Karim Ramadan", email = "karim.r.emam@gmail.com" }
+]
+keywords = ["tecnosystemi", "pico", "iot", "udp", "hvac"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "jinja2>=3.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-timeout"]
+
+[build-system]
+requires = ["uv_build>=0.9.9,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-timeout>=2.4.0",
+]
