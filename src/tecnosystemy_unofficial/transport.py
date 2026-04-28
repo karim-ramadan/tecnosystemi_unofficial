@@ -1,26 +1,34 @@
 """
-UDP transport layer: manages the send socket and persistent listener thread.
+UDP transport layer: manages the per-device send socket and delegates
+receiving to the process-level SharedUDPListener.
 
 Tecnosystemi devices use two separate UDP channels:
   - Send:    local → device at port 40070
   - Receive: device → local at port 40069
 
-The listener runs in a dedicated thread and dispatches decoded JSON packets to
-all registered handlers.
+All TecnoClient instances share one socket bound to the receive port (via
+SharedUDPListener).  Incoming packets are dispatched to each transport by the
+source IP address of the sending device.
 """
 
-import json
+import errno
 import logging
 import socket
-import threading
+import time
 from typing import Callable
+
+from .shared_listener import SharedUDPListener
 
 logger = logging.getLogger(__name__)
 
 
 class UDPTransport:
     """
-    Low-level UDP transport with a persistent background listener.
+    Per-device UDP transport.
+
+    Owns the (unbound) send socket for one device.  Receiving is handled by
+    the process-level :class:`SharedUDPListener` so multiple transports can
+    coexist without conflicting on the receive port.
 
     Usage::
 
@@ -30,23 +38,18 @@ class UDPTransport:
             transport.send(b'...')
     """
 
-    BUFFER_SIZE = 4096
-    RECV_THREAD_TIMEOUT = 1.0  # seconds; controls how quickly stop() returns
-
     def __init__(
         self,
         ip: str,
         send_port: int,
         receive_port: int,
     ):
-        self.ip = ip
+        # Normalize to a canonical IPv4 string so it matches addr[0] from recvfrom.
+        self.ip = socket.gethostbyname(ip)
         self.send_port = send_port
         self.receive_port = receive_port
 
         self._send_sock: socket.socket | None = None
-        self._recv_sock: socket.socket | None = None
-        self._recv_thread: threading.Thread | None = None
-        self._stop_event = threading.Event()
         self._packet_handlers: list[Callable[[dict], None]] = []
         self._started = False
 
@@ -54,59 +57,59 @@ class UDPTransport:
     # Public API
     # ------------------------------------------------------------------
 
-    def add_packet_handler(self, handler: Callable[[dict], None]):
+    def add_packet_handler(self, handler: Callable[[dict], None]) -> None:
         """Register a callback that is invoked for every received JSON packet."""
         self._packet_handlers.append(handler)
 
-    def start(self):
-        """Open sockets and start the listener thread."""
+    def start(self) -> None:
+        """Open the send socket and register with the shared listener."""
         if self._started:
             return
 
         self._send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
-        self._recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self._recv_sock.settimeout(self.RECV_THREAD_TIMEOUT)
-        self._recv_sock.bind(("", self.receive_port))
-
-        self._stop_event.clear()
-        self._recv_thread = threading.Thread(
-            target=self._recv_loop,
-            name="tecno-udp-listener",
-            daemon=False,
-        )
-        self._recv_thread.start()
+        SharedUDPListener.get(self.receive_port).register(self.ip, self._dispatch_packet)
         self._started = True
         logger.debug(
-            "UDPTransport started: listening on :%d, sending to %s:%d",
+            "UDPTransport started: listening on :%d (shared), sending to %s:%d",
             self.receive_port,
             self.ip,
             self.send_port,
         )
 
-    def stop(self):
-        """Signal the listener to stop and close all sockets."""
+    def stop(self) -> None:
+        """Unregister from the shared listener and close the send socket."""
         if not self._started:
             return
-        self._stop_event.set()
-        if self._recv_thread:
-            self._recv_thread.join(timeout=self.RECV_THREAD_TIMEOUT + 1.0)
-        for sock in (self._send_sock, self._recv_sock):
-            if sock:
-                try:
-                    sock.close()
-                except Exception:
-                    pass
-        self._send_sock = None
-        self._recv_sock = None
+        SharedUDPListener.get(self.receive_port).unregister(self.ip, self._dispatch_packet)
+        if self._send_sock:
+            try:
+                self._send_sock.close()
+            except Exception:
+                pass
+            self._send_sock = None
         self._started = False
-        logger.debug("UDPTransport stopped")
+        logger.debug("UDPTransport stopped for %s", self.ip)
 
-    def send(self, data: bytes):
-        """Send raw bytes to the device."""
+    def send(self, data: bytes) -> None:
+        """Send raw bytes to the device, retrying once on transient routing errors."""
         if not self._send_sock:
             raise RuntimeError("Transport is not started. Call start() first.")
-        self._send_sock.sendto(data, (self.ip, self.send_port))
+        for attempt in range(3):
+            try:
+                self._send_sock.sendto(data, (self.ip, self.send_port))
+                return
+            except OSError as exc:
+                # EHOSTUNREACH / ENETUNREACH can be transient on macOS when the
+                # ARP cache for the target IP is stale right after a discovery scan.
+                if exc.errno in (errno.EHOSTUNREACH, errno.ENETUNREACH) and attempt < 2:
+                    logger.warning(
+                        "send attempt %d failed (%s), retrying in 0.5s …",
+                        attempt + 1,
+                        exc,
+                    )
+                    time.sleep(0.5)
+                    continue
+                raise
 
     def __enter__(self):
         self.start()
@@ -119,29 +122,10 @@ class UDPTransport:
     # Internal
     # ------------------------------------------------------------------
 
-    def _recv_loop(self):
-        assert self._recv_sock is not None
-        while not self._stop_event.is_set():
+    def _dispatch_packet(self, packet: dict) -> None:
+        """Forward a received packet to all registered handlers."""
+        for handler in self._packet_handlers:
             try:
-                data, addr = self._recv_sock.recvfrom(self.BUFFER_SIZE)
-            except socket.timeout:
-                continue
-            except OSError:
-                if not self._stop_event.is_set():
-                    logger.exception("Socket error in receive loop")
-                break
-
-            try:
-                packet = json.loads(data.decode("utf-8"))
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                logger.debug("Ignoring non-JSON packet from %s", addr)
-                continue
-
-            logger.debug("Received from %s: %s", addr, packet)
-            for handler in self._packet_handlers:
-                try:
-                    handler(packet)
-                except Exception:
-                    logger.exception("Packet handler raised an exception")
-
-        logger.debug("Listener thread exiting")
+                handler(packet)
+            except Exception:
+                logger.exception("Packet handler raised an exception")

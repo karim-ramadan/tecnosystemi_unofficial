@@ -23,6 +23,9 @@ dependencies = [
     "jinja2>=3.1",
 ]
 
+[project.scripts]
+tecno = "tecnosystemy_unofficial.cli:main"
+
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-timeout"]
 
