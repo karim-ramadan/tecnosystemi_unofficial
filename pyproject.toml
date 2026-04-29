@@ -1,5 +1,5 @@
 [project]
-name = "tecnosystemy-unofficial"
+name = "tecnosystemi-unofficial"
 version = "0.3.0"
 description = "Unofficial Python library for controlling Tecnosystemi devices (Pico, etc.) via UDP"
 readme = "README.md"
@@ -24,10 +24,10 @@ dependencies = [
 ]
 
 [project.scripts]
-tecno = "tecnosystemy_unofficial.cli:main"
+tecno = "tecnosystemi_unofficial.cli:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-timeout"]
+dev = ["pytest>=8", "pytest-timeout", "pytest-asyncio>=0.23"]
 
 [build-system]
 requires = ["uv_build>=0.9.9,<0.10.0"]
@@ -40,8 +40,12 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
     "pytest-timeout>=2.4.0",
+    "pytest-asyncio>=0.23",
 ]

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live device test script for tecnosystemy_unofficial.
+Live device test script for tecnosystemi_unofficial.
 
 Run with:  uv run python local_device_test.py [IP [IP2 ...]] [--pin PIN]
 
@@ -9,6 +9,7 @@ tests every device found.  Results are collected and a summary table is printed
 at the end — a failure on one device does not abort the run.
 """
 
+import asyncio
 import json
 import socket
 import sys
@@ -23,17 +24,17 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 import subprocess
 result = subprocess.run(
-    [sys.executable, "-c", "import tecnosystemy_unofficial"],
+    [sys.executable, "-c", "import tecnosystemi_unofficial"],
     capture_output=True,
 )
 if result.returncode != 0:
-    print("Installing tecnosystemy-unofficial in the current venv …")
+    print("Installing tecnosystemi-unofficial in the current venv …")
     subprocess.run([sys.executable, "-m", "pip", "install", "-e", "."], check=True)
 
-from tecnosystemy_unofficial import TecnoClient
-from tecnosystemy_unofficial.devices import PicoDevice
-from tecnosystemy_unofficial.idp import IDPManager
-from tecnosystemy_unofficial.shared_listener import SharedUDPListener
+from tecnosystemi_unofficial import TecnoClient
+from tecnosystemi_unofficial.devices import PicoDevice
+from tecnosystemi_unofficial.idp import IDPManager
+from tecnosystemi_unofficial.shared_listener import SharedUDPListener
 
 
 COMMON_SUBNETS = ["192.168.1", "192.168.0", "192.168.4"]
@@ -108,7 +109,7 @@ def print_section(title: str) -> None:
     print(f"{'─' * 60}")
 
 
-def run_tests(ip: str, pin: str) -> DeviceResult:
+async def run_tests(ip: str, pin: str) -> DeviceResult:
     """
     Run info + state tests against one device.  Never raises; errors are
     captured in the returned DeviceResult.
@@ -126,7 +127,7 @@ def run_tests(ip: str, pin: str) -> DeviceResult:
             # --- pico_info -----------------------------------------------
             print_section("pico_info  (no PIN required)")
             print("Sending pico_info …")
-            info = pico.get_info(timeout=15.0)
+            info = await pico.get_info(timeout=15.0)
             if info is None:
                 result.error = "pico_info timed out — check IP and network"
                 print(f"✗ {result.error}")
@@ -141,7 +142,7 @@ def run_tests(ip: str, pin: str) -> DeviceResult:
             # --- stato_sync -----------------------------------------------
             print_section("stato_sync  (PIN required for full data)")
             print(f"Sending stato_sync with pin={pin!r} …")
-            state = pico.get_state(timeout=20.0)
+            state = await pico.get_state(timeout=20.0)
             if state is None:
                 if pin == "-1":
                     print("✗ No full state (expected without a real PIN).")
@@ -205,7 +206,7 @@ def print_summary(results: list[DeviceResult]) -> None:
 # Entry point
 # ---------------------------------------------------------------------------
 
-def main() -> None:
+async def main() -> None:
     args = sys.argv[1:]
 
     # Parse optional --pin flag
@@ -236,7 +237,7 @@ def main() -> None:
                   "(try: uv run python local_device_test.py 192.168.4.1)")
             sys.exit(1)
 
-    results = [run_tests(ip, pin) for ip in ips]
+    results = [await run_tests(ip, pin) for ip in ips]
 
     print_summary(results)
 
@@ -245,4 +246,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

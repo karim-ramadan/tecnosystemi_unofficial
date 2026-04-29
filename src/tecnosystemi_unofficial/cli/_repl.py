@@ -4,6 +4,7 @@ Interactive REPL and shared command helpers for the Tecnosystemi CLI.
 
 from __future__ import annotations
 
+import asyncio
 import cmd
 import json
 import logging
@@ -95,7 +96,7 @@ def enable_debug() -> Optional[logging.Handler]:
     Returns the added handler, or ``None`` if debug was already active.
     Does not add duplicate handlers.
     """
-    lib_logger = logging.getLogger("tecnosystemy_unofficial")
+    lib_logger = logging.getLogger("tecnosystemi_unofficial")
     for h in lib_logger.handlers:
         if getattr(h, _DEBUG_TAG, False):
             return None  # already enabled
@@ -113,7 +114,7 @@ def enable_debug() -> Optional[logging.Handler]:
 
 def disable_debug(handler: logging.Handler) -> None:
     """Remove the debug handler and reset the library log level."""
-    lib_logger = logging.getLogger("tecnosystemy_unofficial")
+    lib_logger = logging.getLogger("tecnosystemi_unofficial")
     lib_logger.removeHandler(handler)
     if not lib_logger.handlers:
         lib_logger.setLevel(logging.WARNING)
@@ -213,7 +214,7 @@ class TecnoREPL(cmd.Cmd):
     Interactive REPL for Tecnosystemi device control.
 
     Commands: discover, select, info, state, set, on, off, speed, mode,
-              humidity, night, pin, debug, quit/exit.
+              humidity, night, pin, check_pin, debug, quit/exit.
     """
 
     intro = (
@@ -347,7 +348,7 @@ class TecnoREPL(cmd.Cmd):
         old_pin = self._pico.pin
         self._pico.pin = candidate
         print("  Checking PIN …")
-        if self._pico.check_pin(timeout=8.0):
+        if asyncio.run(self._pico.check_pin(timeout=8.0)):
             ip = self._client.ip  # type: ignore[union-attr]
             self._session.set_pin(ip, candidate)
             print(f"  {C.green('✓')} PIN accepted and saved for {ip}")
@@ -477,7 +478,7 @@ class TecnoREPL(cmd.Cmd):
         if not self._require_device():
             return
         print("  Fetching info …")
-        print_info(self._pico.get_info(timeout=12.0))  # type: ignore[union-attr]
+        print_info(asyncio.run(self._pico.get_info(timeout=12.0)))  # type: ignore[union-attr]
 
     def do_state(self, _arg: str) -> None:
         """Fetch and display full device state (PIN required)."""
@@ -486,7 +487,7 @@ class TecnoREPL(cmd.Cmd):
         if not self._ensure_pin():
             return
         print("  Fetching state …")
-        print_state(self._pico.get_state(timeout=15.0))  # type: ignore[union-attr]
+        print_state(asyncio.run(self._pico.get_state(timeout=15.0)))  # type: ignore[union-attr]
 
     def do_set(self, arg: str) -> None:
         """set key=value [key=value ...]  —  update device fields.
@@ -504,7 +505,7 @@ class TecnoREPL(cmd.Cmd):
         if not fields:
             print("  Usage: set key=value [key=value ...]")
             return
-        ok = self._pico.update(**fields)  # type: ignore[union-attr]
+        ok = asyncio.run(self._pico.update(**fields))  # type: ignore[union-attr]
         if ok:
             print(f"  {C.green('✓')}  {' '.join(f'{k}={v}' for k, v in fields.items())}")
         else:
@@ -516,7 +517,7 @@ class TecnoREPL(cmd.Cmd):
             return
         if not self._ensure_pin():
             return
-        if self._pico.turn_on():  # type: ignore[union-attr]
+        if asyncio.run(self._pico.turn_on()):  # type: ignore[union-attr]
             print(f"  {C.green('✓')} Device {C.green('ON')}")
         else:
             print(f"  {C.red('✗')} Command timed out.")
@@ -527,7 +528,7 @@ class TecnoREPL(cmd.Cmd):
             return
         if not self._ensure_pin():
             return
-        if self._pico.turn_off():  # type: ignore[union-attr]
+        if asyncio.run(self._pico.turn_off()):  # type: ignore[union-attr]
             print(f"  {C.green('✓')} Device {C.red('OFF')}")
         else:
             print(f"  {C.red('✗')} Command timed out.")
@@ -544,7 +545,7 @@ class TecnoREPL(cmd.Cmd):
             return
         speed = int(parts[0])
         raw: Optional[int] = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
-        ok = self._pico.set_speed(speed, speed_raw=raw)  # type: ignore[union-attr]
+        ok = asyncio.run(self._pico.set_speed(speed, speed_raw=raw))  # type: ignore[union-attr]
         if ok:
             speed_name = SPEEDS.get(speed, "")
             label = f"{speed}" + (f"  {C.dim(f'({speed_name})')}" if speed_name else "")
@@ -596,7 +597,7 @@ class TecnoREPL(cmd.Cmd):
             print(f"  {C.yellow('!')} Usage: mode <1-12>")
             return
         mode_num = int(arg)
-        ok = self._pico.set_mode(mode_num)  # type: ignore[union-attr]
+        ok = asyncio.run(self._pico.set_mode(mode_num))  # type: ignore[union-attr]
         if ok:
             mode_info = MODES.get(mode_num)
             label = f"{mode_num}" + (f"  {C.dim(f'({mode_info[0]})')}" if mode_info else "")
@@ -614,7 +615,7 @@ class TecnoREPL(cmd.Cmd):
         if not arg.isdigit():
             print("  Usage: humidity <0-100>")
             return
-        ok = self._pico.set_humidity(int(arg))  # type: ignore[union-attr]
+        ok = asyncio.run(self._pico.set_humidity(int(arg)))  # type: ignore[union-attr]
         if ok:
             print(f"  {C.green('✓')} Humidity → {arg}%")
         else:
@@ -634,7 +635,7 @@ class TecnoREPL(cmd.Cmd):
         else:
             print("  Usage: night on | night off")
             return
-        ok = self._pico.set_night_mode(enabled)  # type: ignore[union-attr]
+        ok = asyncio.run(self._pico.set_night_mode(enabled))  # type: ignore[union-attr]
         if ok:
             print(f"  {C.green('✓')} Night mode → {'on' if enabled else 'off'}")
         else:
@@ -682,12 +683,22 @@ class TecnoREPL(cmd.Cmd):
         old_pin = self._pico.pin  # type: ignore[union-attr]
         self._pico.pin = arg  # type: ignore[union-attr]
         print("  Checking PIN …")
-        if self._pico.check_pin(timeout=8.0):  # type: ignore[union-attr]
+        if asyncio.run(self._pico.check_pin(timeout=8.0)):  # type: ignore[union-attr]
             self._session.set_pin(ip, arg)
             print(f"  {C.green('✓')} PIN accepted and saved for {ip}")
         else:
             self._pico.pin = old_pin  # type: ignore[union-attr]
             print(f"  {C.red('✗')} PIN rejected by device.  PIN not saved.")
+
+    def do_check_pin(self, _arg: str) -> None:
+        """Check whether the stored PIN is accepted by the active device."""
+        if not self._require_device():
+            return
+        print("  Checking PIN …")
+        if asyncio.run(self._pico.check_pin()):  # type: ignore[union-attr]
+            print(f"  {C.green('✓')} PIN accepted.")
+        else:
+            print(f"  {C.red('✗')} PIN rejected (or no response).")
 
     def do_debug(self, arg: str) -> None:
         """debug [on|off]  —  toggle verbose TX/RX packet logging."""

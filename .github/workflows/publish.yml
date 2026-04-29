@@ -24,7 +24,7 @@ jobs:
 
     environment:
       name: pypi
-      url: https://pypi.org/p/tecnosystemy-unofficial
+      url: https://pypi.org/p/tecnosystemi-unofficial
 
     steps:
       - uses: actions/checkout@v4

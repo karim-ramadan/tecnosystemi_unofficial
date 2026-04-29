@@ -1,7 +1,7 @@
 """
 Jinja2-based command template loader.
 
-Templates live under ``src/tecnosystemy_unofficial/templates/`` and produce
+Templates live under ``src/tecnosystemi_unofficial/templates/`` and produce
 JSON strings when rendered. Users can supply additional template directories
 that take priority over the bundled ones, making it easy to define custom
 commands without writing Python.

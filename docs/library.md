@@ -1,4 +1,4 @@
-# tecnosystemy-unofficial — Library / API
+# tecnosystemi-unofficial — Library / API
 
 Python library for controlling **Tecnosystemi** IoT devices (Pico ventilation units) over UDP.
 
@@ -22,28 +22,28 @@ Python library for controlling **Tecnosystemi** IoT devices (Pico ventilation un
 ## Installation
 
 ```bash
-pip install tecnosystemy-unofficial
+pip install tecnosystemi-unofficial
 # or with uv
-uv add tecnosystemy-unofficial
+uv add tecnosystemi-unofficial
 ```
 
 ## Quick Start
 
 ```python
-from tecnosystemy_unofficial import TecnoClient
-from tecnosystemy_unofficial.devices import PicoDevice
+from tecnosystemi_unofficial import TecnoClient
+from tecnosystemi_unofficial.devices import PicoDevice
 
 with TecnoClient(ip="192.168.1.16") as client:
     pico = PicoDevice(client, pin="1234")
 
     # Read
-    info  = pico.get_info()    # serial, firmware, name
-    state = pico.get_state()   # temperatures, speed, mode, humidity …
+    info = pico.get_info()  # serial, firmware, name
+    state = pico.get_state()  # temperatures, speed, mode, humidity …
 
     # Control
     pico.turn_on()
-    pico.set_speed(3)          # 1=Min … 5=Max
-    pico.set_mode(2)           # 2 = Estrazione (Extraction)
+    pico.set_speed(3)  # 1=Min … 5=Max
+    pico.set_mode(2)  # 2 = Estrazione (Extraction)
     pico.set_humidity(55)
     pico.set_night_mode(True)
     pico.turn_off()
@@ -55,8 +55,8 @@ All `TecnoClient` instances in the same process share a single UDP socket on
 port 40069 (devices always reply to that port). No extra configuration needed.
 
 ```python
-from tecnosystemy_unofficial import TecnoClient
-from tecnosystemy_unofficial.devices import PicoDevice
+from tecnosystemi_unofficial import TecnoClient
+from tecnosystemi_unofficial.devices import PicoDevice
 
 with TecnoClient(ip="192.168.1.16") as c1, TecnoClient(ip="192.168.1.40") as c2:
     p1 = PicoDevice(c1, pin="1234")
@@ -72,7 +72,7 @@ persist it across restarts (required if you care about idp continuity):
 
 ```python
 from pathlib import Path
-from tecnosystemy_unofficial import TecnoClient, IDPManager
+from tecnosystemi_unofficial import TecnoClient, IDPManager
 
 idp = IDPManager(backend="file", path=Path("~/.tecno/idp.json").expanduser())
 
@@ -109,15 +109,15 @@ my_templates/
 
 ```python
 from pathlib import Path
-from tecnosystemy_unofficial import TecnoClient
-from tecnosystemy_unofficial.devices import PicoDevice
+from tecnosystemi_unofficial import TecnoClient
+from tecnosystemi_unofficial.devices import PicoDevice
 
 with TecnoClient(ip="192.168.1.16", template_dirs=[Path("my_templates")]) as client:
     pico = PicoDevice(client, pin="1234")
     pico.send_template("pico/set_speed_auto.json.j2", speed=5, mod=4)
 ```
 
-Bundled templates live in `src/tecnosystemy_unofficial/templates/pico/`.
+Bundled templates live in `src/tecnosystemi_unofficial/templates/pico/`.
 
 ## PicoDevice API Reference
 

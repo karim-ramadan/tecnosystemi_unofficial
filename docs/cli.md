@@ -1,4 +1,4 @@
-# tecnosystemy-unofficial — CLI
+# tecnosystemi-unofficial — CLI
 
 Interactive terminal tool to discover, inspect and control Tecnosystemi Pico devices.
 
@@ -7,9 +7,9 @@ Interactive terminal tool to discover, inspect and control Tecnosystemi Pico dev
 ## Installation
 
 ```bash
-pipx install tecnosystemy-unofficial   # recommended (isolated environment)
+pipx install tecnosystemi-unofficial   # recommended (isolated environment)
 # or
-pip install tecnosystemy-unofficial
+pip install tecnosystemi-unofficial
 ```
 
 ## Launch

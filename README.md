@@ -1,4 +1,4 @@
-# tecnosystemy-unofficial
+# tecnosystemi-unofficial
 
 Unofficial Python library + CLI for controlling **Tecnosystemi** IoT devices (Pico ventilation units and more) over UDP.
 
@@ -15,28 +15,28 @@ Unofficial Python library + CLI for controlling **Tecnosystemi** IoT devices (Pi
 ## Installation
 
 ```bash
-pip install tecnosystemy-unofficial
+pip install tecnosystemi-unofficial
 ```
 
 For the CLI:
 
 ```bash
-pipx install tecnosystemy-unofficial
+pipx install tecnosystemi-unofficial
 tecno --help
 ```
 
 ## Quick example
 
 ```python
-from tecnosystemy_unofficial import TecnoClient
-from tecnosystemy_unofficial.devices import PicoDevice
+from tecnosystemi_unofficial import TecnoClient
+from tecnosystemi_unofficial.devices import PicoDevice
 
 with TecnoClient(ip="192.168.1.16") as client:
     pico = PicoDevice(client, pin="1234")
     print(pico.get_state())
     pico.turn_on()
     pico.set_speed(3)
-    pico.set_mode(1)   # 1 = Recupero (heat-recovery)
+    pico.set_mode(1)  # 1 = Recupero (heat-recovery)
 ```
 
 ## Running Tests

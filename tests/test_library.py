@@ -5,6 +5,8 @@ Approach: mock the UDPTransport to inject fake responses, then verify
 that TecnoClient and PicoDevice behave correctly.
 """
 
+import asyncio
+import collections
 import json
 import threading
 import time
@@ -14,11 +16,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tecnosystemy_unofficial import IDPManager, TecnoClient
-from tecnosystemy_unofficial.devices import PicoDevice
-from tecnosystemy_unofficial.idp import FileIDPStore, MemoryIDPStore
-from tecnosystemy_unofficial.session import CONTROL_COMMANDS, RequestSession, RequestState
-from tecnosystemy_unofficial.templates_loader import TemplateLoader
+from tecnosystemi_unofficial import IDPManager, TecnoClient
+from tecnosystemi_unofficial.devices import PicoDevice
+from tecnosystemi_unofficial.idp import FileIDPStore, MemoryIDPStore
+from tecnosystemi_unofficial.session import CONTROL_COMMANDS, RequestSession, RequestState
+from tecnosystemi_unofficial.templates_loader import TemplateLoader
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +126,8 @@ class TestRequestSession:
         session = RequestSession(idp=1, command=cmd)
         assert not session.expects_data
 
-        session.handle_packet({"idp": 1, "res": 99})
+        complete = session.handle_packet({"idp": 1, "res": 99})
+        assert complete is True
         assert session.state == RequestState.COMPLETED
         assert session.response is not None
 
@@ -132,30 +135,21 @@ class TestRequestSession:
         session = RequestSession(idp=1, command="stato_sync")
         assert session.expects_data
 
-        session.handle_packet({"idp": 1, "res": 99})
+        complete = session.handle_packet({"idp": 1, "res": 99})
+        assert complete is False
         assert session.state == RequestState.WAITING_FINAL
 
-        session.handle_packet({"idp": 1, "res": 1, "on_off": 1})
+        complete = session.handle_packet({"idp": 1, "res": 1, "on_off": 1})
+        assert complete is True
         assert session.state == RequestState.COMPLETED
         assert session.response["on_off"] == 1
 
     def test_data_without_prior_ack_completes(self):
         """Device may skip the res:99 ACK in some edge cases."""
         session = RequestSession(idp=1, command="pico_info")
-        session.handle_packet({"idp": 1, "res": 1, "ser": "ABC"})
+        complete = session.handle_packet({"idp": 1, "res": 1, "ser": "ABC"})
+        assert complete is True
         assert session.state == RequestState.COMPLETED
-
-    def test_wait_returns_none_on_timeout(self):
-        session = RequestSession(idp=1, command="stato_sync")
-        result = session.wait(timeout=0.05)
-        assert result is None
-        assert session.state == RequestState.TIMED_OUT
-
-    def test_wait_returns_response_when_ready(self):
-        session = RequestSession(idp=1, command="pico_info")
-        threading.Timer(0.02, lambda: session.handle_packet({"idp": 1, "res": 1})).start()
-        result = session.wait(timeout=1.0)
-        assert result is not None
 
     def test_all_packets_stored(self):
         session = RequestSession(idp=1, command="stato_sync")
@@ -242,27 +236,27 @@ class TestTemplateLoader:
 # ---------------------------------------------------------------------------
 
 
-def _make_client_with_fake_transport(responses: dict[str, dict]):
+def _make_client_with_fake_transport(responses: dict[str, dict], *, loop: asyncio.AbstractEventLoop):
     """
     Create a TecnoClient whose transport is mocked.
 
     ``responses`` maps command names to the response dict the fake device
     should return.  For control commands, returns res:99.  For info commands,
     returns res:99 then the response.
+
+    ``loop`` must be the running asyncio event loop (pass asyncio.get_running_loop()
+    from the test).  Fake responses are scheduled as async tasks in that loop.
     """
     client = TecnoClient.__new__(TecnoClient)
     client.ip = "192.168.4.1"
     client.timeout = 2.0
 
-    from tecnosystemy_unofficial.idp import IDPManager
-    from tecnosystemy_unofficial.session import RequestSession, CONTROL_COMMANDS
-    from tecnosystemy_unofficial.templates_loader import TemplateLoader
-    import threading
-
     client.idp_manager = IDPManager()
     client.template_loader = TemplateLoader()
-    client._sessions: dict[int, RequestSession] = {}
+    client._sessions: dict = {}
     client._sessions_lock = threading.Lock()
+    client._pending: dict = {}
+    client._received: collections.deque = collections.deque(maxlen=TecnoClient.BUFFER_SIZE)
 
     send_calls = []
 
@@ -274,22 +268,20 @@ def _make_client_with_fake_transport(responses: dict[str, dict]):
         frm = payload.get("frm", "")
 
         if frm == "app" and idp is not None and "res" not in payload:
-            # This is a real command (not an ACK)
             resp = responses.get(cmd)
             if resp is not None:
                 full_resp = {"idp": idp, "frm": "mst", **resp}
 
-                def _deliver():
-                    time.sleep(0.02)
+                async def _deliver():
+                    await asyncio.sleep(0.02)
                     with client._sessions_lock:
                         session = client._sessions.get(idp)
-                    if session:
-                        if session.expects_data:
-                            session.handle_packet({"idp": idp, "frm": "mst", "res": 99})
-                            time.sleep(0.01)
-                        session.handle_packet(full_resp)
+                    if session and session.expects_data:
+                        client._route_packet({"idp": idp, "frm": "mst", "res": 99})
+                        await asyncio.sleep(0.01)
+                    client._route_packet(full_resp)
 
-                threading.Thread(target=_deliver, daemon=True).start()
+                asyncio.run_coroutine_threadsafe(_deliver(), loop)
 
     mock_transport = MagicMock()
     mock_transport.send.side_effect = fake_send
@@ -299,141 +291,188 @@ def _make_client_with_fake_transport(responses: dict[str, dict]):
 
 
 class TestTecnoClientWithMock:
-    def test_send_info_command(self):
+    async def test_send_info_command(self):
+        loop = asyncio.get_running_loop()
         client, _ = _make_client_with_fake_transport(
-            {"pico_info": {"res": 1, "ser": "TS001", "fw_ver": "1.2.3"}}
+            {"pico_info": {"res": 1, "ser": "TS001", "fw_ver": "1.2.3"}},
+            loop=loop,
         )
-        result = client.send_command({"cmd": "pico_info", "pin": "-1"})
+        result = await client.send_command({"cmd": "pico_info", "pin": "-1"})
         assert result is not None
         assert result["ser"] == "TS001"
 
-    def test_send_control_command(self):
+    async def test_send_control_command(self):
+        loop = asyncio.get_running_loop()
         client, _ = _make_client_with_fake_transport(
-            {"upd_pico": {"res": 99}}
+            {"upd_pico": {"res": 99}},
+            loop=loop,
         )
-        result = client.send_command({"cmd": "upd_pico", "pin": "1234", "on_off": 1})
+        result = await client.send_command({"cmd": "upd_pico", "pin": "1234", "on_off": 1})
         assert result is not None
         assert result["res"] == 99
 
-    def test_timeout_returns_none(self):
-        client, _ = _make_client_with_fake_transport({})
-        result = client.send_command({"cmd": "pico_info", "pin": "-1"}, timeout=0.1)
+    async def test_timeout_returns_none(self):
+        loop = asyncio.get_running_loop()
+        client, _ = _make_client_with_fake_transport({}, loop=loop)
+        result = await client.send_command({"cmd": "pico_info", "pin": "-1"}, timeout=0.1)
         assert result is None
 
-    def test_send_template(self):
+    async def test_send_template(self):
+        loop = asyncio.get_running_loop()
         client, sent = _make_client_with_fake_transport(
-            {"upd_pico": {"res": 99}}
+            {"upd_pico": {"res": 99}},
+            loop=loop,
         )
-        result = client.send_template("pico/upd_pico.json.j2", pin="1234", on_off=1)
+        result = await client.send_template("pico/upd_pico.json.j2", pin="1234", on_off=1)
         assert result is not None
         cmd_sent = next(p for p in sent if p.get("cmd") == "upd_pico")
         assert cmd_sent["on_off"] == 1
         assert "idp" in cmd_sent
         assert cmd_sent["frm"] == "app"
 
-    def test_idp_increments_across_commands(self):
+    async def test_idp_increments_across_commands(self):
+        loop = asyncio.get_running_loop()
         client, sent = _make_client_with_fake_transport(
-            {"pico_info": {"res": 1, "ser": "X"}}
+            {"pico_info": {"res": 1, "ser": "X"}},
+            loop=loop,
         )
-        client.send_command({"cmd": "pico_info", "pin": "-1"})
-        client.send_command({"cmd": "pico_info", "pin": "-1"})
-        # Exclude ACK packets (they also carry cmd but have "res" set)
+        await client.send_command({"cmd": "pico_info", "pin": "-1"})
+        await client.send_command({"cmd": "pico_info", "pin": "-1"})
         idps = [p["idp"] for p in sent if p.get("cmd") == "pico_info" and "res" not in p]
         assert idps[0] != idps[1]
 
-    def test_ack_sent_for_data_response(self):
+    async def test_ack_sent_for_data_response(self):
+        loop = asyncio.get_running_loop()
         client, sent = _make_client_with_fake_transport(
-            {"pico_info": {"res": 1, "ser": "X"}}
+            {"pico_info": {"res": 1, "ser": "X"}},
+            loop=loop,
         )
-        client.send_command({"cmd": "pico_info", "pin": "-1"})
+        await client.send_command({"cmd": "pico_info", "pin": "-1"})
         acks = [p for p in sent if p.get("res") == 99]
         assert len(acks) >= 1
 
+    async def test_circular_buffer_stores_received_packets(self):
+        loop = asyncio.get_running_loop()
+        client, _ = _make_client_with_fake_transport(
+            {"pico_info": {"res": 1, "ser": "X"}},
+            loop=loop,
+        )
+        await client.send_command({"cmd": "pico_info", "pin": "-1"})
+        recent = client.get_recent_packets()
+        # Should have at least: res:99 ACK + res:1 data
+        assert len(recent) >= 1
+        assert all("ts" in e and "ip" in e and "idp" in e and "packet" in e for e in recent)
+
+    async def test_circular_buffer_filter_by_idp(self):
+        loop = asyncio.get_running_loop()
+        client, _ = _make_client_with_fake_transport(
+            {"pico_info": {"res": 1, "ser": "X"}},
+            loop=loop,
+        )
+        result = await client.send_command({"cmd": "pico_info", "pin": "-1"})
+        assert result is not None
+        idp_used = result["idp"]
+        filtered = client.get_recent_packets(idp=idp_used)
+        assert all(e["idp"] == idp_used for e in filtered)
+
 
 class TestPicoDevice:
-    def _make_pico(self, responses=None):
+    def _make_pico(self, responses=None, *, loop):
         responses = responses or {}
-        client, sent = _make_client_with_fake_transport(responses)
+        client, sent = _make_client_with_fake_transport(responses, loop=loop)
         pico = PicoDevice(client, pin="9999")
         return pico, sent
 
-    def test_get_info(self):
-        pico, _ = self._make_pico({"pico_info": {"res": 1, "ser": "ABC", "name": "Pico1"}})
-        info = pico.get_info()
+    async def test_get_info(self):
+        loop = asyncio.get_running_loop()
+        pico, _ = self._make_pico({"pico_info": {"res": 1, "ser": "ABC", "name": "Pico1"}}, loop=loop)
+        info = await pico.get_info()
         assert info["ser"] == "ABC"
 
-    def test_get_state(self):
+    async def test_get_state(self):
+        loop = asyncio.get_running_loop()
         pico, _ = self._make_pico(
-            {"stato_sync": {"res": 1, "on_off": 1, "speed": 3, "AMB_tmpr": 22}}
+            {"stato_sync": {"res": 1, "on_off": 1, "speed": 3, "AMB_tmpr": 22}},
+            loop=loop,
         )
-        state = pico.get_state()
+        state = await pico.get_state()
         assert state["speed"] == 3
         assert state["AMB_tmpr"] == 22
 
-    def test_turn_on(self):
-        pico, sent = self._make_pico({"upd_pico": {"res": 99}})
-        assert pico.turn_on() is True
+    async def test_turn_on(self):
+        loop = asyncio.get_running_loop()
+        pico, sent = self._make_pico({"upd_pico": {"res": 99}}, loop=loop)
+        assert await pico.turn_on() is True
         cmd = next(p for p in sent if p.get("cmd") == "upd_pico")
         assert cmd["on_off"] == 1
         assert cmd["pin"] == "9999"
 
-    def test_turn_off(self):
-        pico, sent = self._make_pico({"upd_pico": {"res": 99}})
-        assert pico.turn_off() is True
+    async def test_turn_off(self):
+        loop = asyncio.get_running_loop()
+        pico, sent = self._make_pico({"upd_pico": {"res": 99}}, loop=loop)
+        assert await pico.turn_off() is True
         cmd = next(p for p in sent if p.get("cmd") == "upd_pico")
         assert cmd["on_off"] == 2
 
-    def test_set_speed(self):
-        pico, sent = self._make_pico({"upd_pico": {"res": 99}})
-        assert pico.set_speed(3, speed_raw=100) is True
+    async def test_set_speed(self):
+        loop = asyncio.get_running_loop()
+        pico, sent = self._make_pico({"upd_pico": {"res": 99}}, loop=loop)
+        assert await pico.set_speed(3, speed_raw=100) is True
         cmd = next(p for p in sent if p.get("cmd") == "upd_pico")
         assert cmd["speed"] == 3
         assert cmd["spd_row"] == 100
 
-    def test_set_mode(self):
-        pico, sent = self._make_pico({"upd_pico": {"res": 99}})
-        assert pico.set_mode(2, on_off=1) is True
+    async def test_set_mode(self):
+        loop = asyncio.get_running_loop()
+        pico, sent = self._make_pico({"upd_pico": {"res": 99}}, loop=loop)
+        assert await pico.set_mode(2, on_off=1) is True
         cmd = next(p for p in sent if p.get("cmd") == "upd_pico")
         assert cmd["mod"] == 2
         assert cmd["on_off"] == 1
 
-    def test_set_humidity(self):
-        pico, sent = self._make_pico({"upd_pico": {"res": 99}})
-        pico.set_humidity(60)
+    async def test_set_humidity(self):
+        loop = asyncio.get_running_loop()
+        pico, sent = self._make_pico({"upd_pico": {"res": 99}}, loop=loop)
+        await pico.set_humidity(60)
         cmd = next(p for p in sent if p.get("cmd") == "upd_pico")
         assert cmd["s_umd"] == 60
 
-    def test_set_night_mode(self):
-        pico, sent = self._make_pico({"upd_pico": {"res": 99}})
-        pico.set_night_mode(True)
+    async def test_set_night_mode(self):
+        loop = asyncio.get_running_loop()
+        pico, sent = self._make_pico({"upd_pico": {"res": 99}}, loop=loop)
+        await pico.set_night_mode(True)
         cmd = next(p for p in sent if p.get("cmd") == "upd_pico")
         assert cmd["night_mod"] == 1
 
-    def test_check_pin_valid(self):
-        pico, _ = self._make_pico({"check_pin": {"res": 1}})
-        assert pico.check_pin() is True
+    async def test_check_pin_valid(self):
+        loop = asyncio.get_running_loop()
+        pico, _ = self._make_pico({"check_pin": {"res": 1}}, loop=loop)
+        assert await pico.check_pin() is True
 
-    def test_check_pin_invalid(self):
-        pico, _ = self._make_pico({"check_pin": {"res": 0}})
-        assert pico.check_pin() is False
+    async def test_check_pin_invalid(self):
+        loop = asyncio.get_running_loop()
+        pico, _ = self._make_pico({"check_pin": {"res": 0}}, loop=loop)
+        assert await pico.check_pin() is False
 
-    def test_update_multiple_fields(self):
-        pico, sent = self._make_pico({"upd_pico": {"res": 99}})
-        pico.update(on_off=1, speed=5, mod=3)
+    async def test_update_multiple_fields(self):
+        loop = asyncio.get_running_loop()
+        pico, sent = self._make_pico({"upd_pico": {"res": 99}}, loop=loop)
+        await pico.update(on_off=1, speed=5, mod=3)
         cmd = next(p for p in sent if p.get("cmd") == "upd_pico")
         assert cmd["on_off"] == 1
         assert cmd["speed"] == 5
         assert cmd["mod"] == 3
 
-    def test_turn_on_returns_false_on_timeout(self):
-        pico, _ = self._make_pico({})
-        # No response configured → timeout
-        result = pico.turn_on(timeout=0.1)
+    async def test_turn_on_returns_false_on_timeout(self):
+        loop = asyncio.get_running_loop()
+        pico, _ = self._make_pico({}, loop=loop)
+        result = await pico.turn_on(timeout=0.1)
         assert result is False
 
-    def test_send_template_injects_pin(self):
-        pico, sent = self._make_pico({"upd_pico": {"res": 99}})
-        pico.send_template("pico/upd_pico.json.j2", on_off=1)
+    async def test_send_template_injects_pin(self):
+        loop = asyncio.get_running_loop()
+        pico, sent = self._make_pico({"upd_pico": {"res": 99}}, loop=loop)
+        await pico.send_template("pico/upd_pico.json.j2", on_off=1)
         cmd = next(p for p in sent if p.get("cmd") == "upd_pico")
         assert cmd["pin"] == "9999"
 
@@ -444,8 +483,8 @@ class TestPicoDevice:
 
 
 import socket as _socket
-from tecnosystemy_unofficial.shared_listener import SharedUDPListener
-from tecnosystemy_unofficial.transport import UDPTransport
+from tecnosystemi_unofficial.shared_listener import SharedUDPListener
+from tecnosystemi_unofficial.transport import UDPTransport
 
 # Use a high-numbered port that won't conflict with the real 40069.
 _TEST_RECV_PORT = 49069

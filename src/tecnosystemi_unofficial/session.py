@@ -9,8 +9,6 @@ Protocol behaviour (from decompiled firmware):
   - Client must send an ACK back to the device whenever it receives `res != 99`.
 """
 
-import threading
-import time
 from enum import Enum
 from typing import Optional
 
@@ -33,15 +31,15 @@ class RequestState(Enum):
     WAITING_ACK = "waiting_ack"
     WAITING_FINAL = "waiting_final"
     COMPLETED = "completed"
-    TIMED_OUT = "timed_out"
 
 
 class RequestSession:
     """
     Tracks the lifecycle of a single outgoing command.
 
-    Thread-safe: `handle_packet` may be called from the listener thread while
-    `wait` is blocking in the caller thread.
+    ``handle_packet`` is called by the listener thread; it returns ``True``
+    when the session has received its final response so the caller can resolve
+    the associated asyncio Future.
     """
 
     def __init__(self, idp: int, command: str):
@@ -51,11 +49,14 @@ class RequestSession:
         self.state: RequestState = RequestState.WAITING_ACK
         self.response: Optional[dict] = None
         self.all_packets: list[dict] = []
-        self._event = threading.Event()
-        self.issued_at: float = time.monotonic()
 
-    def handle_packet(self, packet: dict):
-        """Called by the transport layer when a matching packet arrives."""
+    def handle_packet(self, packet: dict) -> bool:
+        """
+        Process an incoming packet.
+
+        Returns ``True`` when the session is complete (final response received),
+        ``False`` when still waiting for more packets.
+        """
         self.all_packets.append(packet)
         res = packet.get("res")
 
@@ -65,27 +66,17 @@ class RequestSession:
                 # Control command: ACK is the final answer
                 self.response = packet
                 self.state = RequestState.COMPLETED
-                self._event.set()
+                return True
             else:
                 # Info/state command: keep waiting for the real data
                 self.state = RequestState.WAITING_FINAL
+                return False
         else:
             # Data response (res:1) or error (res:0)
             self.response = packet
             self.state = RequestState.COMPLETED
-            self._event.set()
-
-    def wait(self, timeout: float) -> Optional[dict]:
-        """Block until response arrives or timeout expires. Returns the response or None."""
-        if self._event.wait(timeout):
-            return self.response
-        self.state = RequestState.TIMED_OUT
-        return None
+            return True
 
     @property
     def is_complete(self) -> bool:
         return self.state == RequestState.COMPLETED
-
-    @property
-    def elapsed(self) -> float:
-        return time.monotonic() - self.issued_at

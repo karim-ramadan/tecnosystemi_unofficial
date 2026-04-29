@@ -1,10 +1,10 @@
 """
-tecnosystemy_unofficial — Unofficial Python library for Tecnosystemi devices.
+tecnosystemi_unofficial — Unofficial Python library for Tecnosystemi devices.
 
 Quickstart::
 
-    from tecnosystemy_unofficial import TecnoClient
-    from tecnosystemy_unofficial.devices import PicoDevice
+    from tecnosystemi_unofficial import TecnoClient
+    from tecnosystemi_unofficial.devices import PicoDevice
 
     with TecnoClient(ip="192.168.4.1") as client:
         pico = PicoDevice(client, pin="1234")
