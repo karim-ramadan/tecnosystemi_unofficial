@@ -17,6 +17,7 @@ from ..client import TecnoClient
 from ..devices import PicoDevice
 from ..idp import IDPManager
 from ..shared_listener import SharedUDPListener
+from ._colors import C
 from ._session import CONFIG_DIR, HISTORY_FILE, IDP_FILE, SessionState
 
 _SEND_PORT = 40070
@@ -25,6 +26,27 @@ _SUBNETS = ["192.168.1", "192.168.0", "192.168.4"]
 
 # Tag placed on the CLI debug handler so we can detect/avoid duplicates.
 _DEBUG_TAG = "_tecno_cli_debug"
+
+# ---------------------------------------------------------------------------
+# Mode / speed tables
+# ---------------------------------------------------------------------------
+
+MODES: dict[int, tuple[str, str]] = {
+    1:  ("Recupero",          "Heat-recovery: simultaneous supply + exhaust"),
+    2:  ("Estrazione",        "Extraction only: exhaust air out"),
+    3:  ("Immissione",        "Supply only: fresh air in"),
+    4:  ("Auto Umidità ☀",    "Auto humidity – summer (fans activate when humidity is high)"),
+    5:  ("Auto Umidità ❄",    "Auto humidity – winter"),
+    6:  ("Comfort Estate",    "Comfort summer: CO₂ + humidity controlled heat-recovery"),
+    7:  ("Comfort Inverno",   "Comfort winter: CO₂ + humidity controlled heat-recovery"),
+    8:  ("CO₂ Recupero",      "CO₂-triggered heat-recovery ventilation"),
+    9:  ("CO₂ Estrazione",    "CO₂-triggered extraction only"),
+    10: ("Auto Umidità 2 ☀",  "Secondary humidity auto – summer"),
+    11: ("Auto Umidità 2 ❄",  "Secondary humidity auto – winter"),
+    12: ("Ricambio Naturale", "Natural air exchange (minimal/no forced ventilation)"),
+}
+
+SPEEDS: dict[int, str] = {1: "Min", 2: "Low", 3: "Medium", 4: "High", 5: "Max"}
 
 
 # ---------------------------------------------------------------------------
@@ -118,25 +140,46 @@ _KNOWN_STATE = {k for k, _ in _STATE_DISPLAY} | {"idp", "frm", "res", "cmd", "pi
 
 def print_info(info: Optional[dict]) -> None:
     if info is None:
-        print("  ✗ No response (timeout).")
+        print(f"  {C.red('✗')} No response (timeout).")
         return
+    header = C.bold("─────  Device Info  ─────")
+    print(f"\n  {header}\n")
     for k in ("ser", "fw_ver", "fw_note", "name", "has_slave"):
         if k in info:
-            print(f"  {k:14s} = {info[k]}")
+            print(f"  {C.cyan(f'{k:14s}')} = {info[k]}")
+    print()
 
 
 def print_state(state: Optional[dict]) -> None:
     if state is None:
-        print("  ✗ No response (timeout).")
+        print(f"  {C.red('✗')} No response (timeout).")
         return
+    header = C.bold("─────  Device State  ─────")
+    print(f"\n  {header}\n")
     for k, fmt in _STATE_DISPLAY:
-        if k in state:
-            print(f"  {k:16s} = {fmt(state[k])}")
+        if k not in state:
+            continue
+        raw = state[k]
+        value = fmt(raw)
+        # Special colouring for certain keys
+        if k == "on_off":
+            value = C.green("ON") if raw == 1 else C.red("OFF")
+        elif k == "mod":
+            mode_info = MODES.get(raw)
+            if mode_info:
+                value = f"{raw}  {C.dim(f'({mode_info[0]} – {mode_info[1]})')}"
+            else:
+                value = str(raw)
+        elif k == "speed":
+            speed_name = SPEEDS.get(raw)
+            value = f"{raw}  {C.dim(f'({speed_name})')}" if speed_name else str(raw)
+        print(f"  {C.cyan(f'{k:16s}')} = {value}")
     extra = {k: v for k, v in state.items() if k not in _KNOWN_STATE}
     if extra:
-        print("  ┄ extra:")
+        print(f"  {C.dim('┄ extra:')}")
         for k, v in extra.items():
-            print(f"  {k:16s} = {v}")
+            print(f"  {C.cyan(f'{k:16s}')} = {v}")
+    print()
 
 
 def parse_kv(arg: str) -> dict:
@@ -174,8 +217,8 @@ class TecnoREPL(cmd.Cmd):
     """
 
     intro = (
-        "\n  Tecnosystemi CLI\n"
-        "  Type 'help' for commands or 'discover' to find devices.\n"
+        f"\n  {C.bold('Tecnosystemi CLI')}\n"
+        f"  Type {C.cyan('help')} for commands or {C.cyan('discover')} to find devices.\n"
     )
 
     def __init__(
@@ -226,7 +269,10 @@ class TecnoREPL(cmd.Cmd):
 
     def _update_prompt(self) -> None:
         ip = self._client.ip if self._client else ""
-        self.prompt = f"  (tecno {ip}) > " if ip else "  (tecno) > "
+        if ip:
+            self.prompt = C.prompt(f"  (tecno {ip}) > ")
+        else:
+            self.prompt = C.prompt("  (tecno) > ")
 
     def _connect(self, ip: str, silent: bool = False) -> bool:
         """
@@ -256,7 +302,7 @@ class TecnoREPL(cmd.Cmd):
             self._update_prompt()
             if not silent:
                 stored = pin != "-1"
-                print(f"  Connected to {ip}" + ("" if stored else "  (no PIN stored — run 'pin <value>' to save one)"))
+                print(f"  {C.green('✓')} Connected to {C.bold(ip)}" + ("" if stored else f"  {C.dim('(no PIN stored — run \"pin <value>\" to save one)')}"))
             return True
         except Exception as exc:
             if client is not None:
@@ -264,12 +310,12 @@ class TecnoREPL(cmd.Cmd):
                     client.stop()
                 except Exception:
                     pass
-            print(f"  ✗ Could not connect to {ip}: {exc}")
+            print(f"  {C.red('✗')} Could not connect to {ip}: {exc}")
             return False
 
     def _require_device(self) -> bool:
         if self._pico is None:
-            print("  No device selected.  Run 'discover', then 'select <n>'.")
+            print(f"  {C.yellow('!')} No device selected.  Run {C.cyan('discover')}, then {C.cyan('select <n>')}.")
             return False
         return True
 
@@ -304,11 +350,11 @@ class TecnoREPL(cmd.Cmd):
         if self._pico.check_pin(timeout=8.0):
             ip = self._client.ip  # type: ignore[union-attr]
             self._session.set_pin(ip, candidate)
-            print(f"  ✓ PIN accepted and saved for {ip}")
+            print(f"  {C.green('✓')} PIN accepted and saved for {ip}")
             return True
         else:
             self._pico.pin = old_pin
-            print("  ✗ PIN rejected by device.")
+            print(f"  {C.red('✗')} PIN rejected by device.")
             return False
 
     def _load_history(self) -> None:
@@ -367,15 +413,39 @@ class TecnoREPL(cmd.Cmd):
         print(f"  Scanning ({timeout}s) …")
         found = discover(timeout)
         if not found:
-            print("  ✗ No devices found.")
+            print(f"  {C.red('✗')} No devices found.")
             self._last_discovered = []
             return
         self._last_discovered = found
-        print(f"\n  Found {len(found)} device(s):\n")
+        print(f"\n  Found {C.bold(str(len(found)))} device(s):\n")
         for i, ip in enumerate(found, 1):
-            marker = "  ◀ active" if ip == self._session.ip else ""
-            print(f"    [{i}]  {ip}{marker}")
-        print("\n  Use 'select <n>' or 'select <IP>' to connect.")
+            if ip == self._session.ip:
+                marker = f"  {C.green('◀ active')}"
+            else:
+                marker = ""
+            print(f"    [{i}]  {C.bold(ip)}{marker}")
+        print()
+
+        # Interactive auto-connect
+        if not sys.stdin.isatty():
+            print(f"  Use 'select <n>' or 'select <IP>' to connect.")
+            return
+
+        if len(found) == 1:
+            print(f"  Auto-connecting to {C.bold(found[0])} …")
+            self._connect(found[0])
+        else:
+            try:
+                choice = input("  Connect to device? (number or Enter to skip): ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return
+            if choice.isdigit():
+                idx = int(choice) - 1
+                if 0 <= idx < len(found):
+                    self._connect(found[idx])
+                else:
+                    print(f"  {C.yellow('!')} Index out of range.")
 
     def do_select(self, arg: str) -> None:
         """select <n|IP>  —  connect to a device by list number or IP."""
@@ -436,9 +506,9 @@ class TecnoREPL(cmd.Cmd):
             return
         ok = self._pico.update(**fields)  # type: ignore[union-attr]
         if ok:
-            print(f"  ✓  {' '.join(f'{k}={v}' for k, v in fields.items())}")
+            print(f"  {C.green('✓')}  {' '.join(f'{k}={v}' for k, v in fields.items())}")
         else:
-            print("  ✗ Command timed out.")
+            print(f"  {C.red('✗')} Command timed out.")
 
     def do_on(self, _arg: str) -> None:
         """Turn the device ON."""
@@ -447,9 +517,9 @@ class TecnoREPL(cmd.Cmd):
         if not self._ensure_pin():
             return
         if self._pico.turn_on():  # type: ignore[union-attr]
-            print("  ✓ Device ON")
+            print(f"  {C.green('✓')} Device {C.green('ON')}")
         else:
-            print("  ✗ Command timed out.")
+            print(f"  {C.red('✗')} Command timed out.")
 
     def do_off(self, _arg: str) -> None:
         """Turn the device OFF."""
@@ -458,9 +528,9 @@ class TecnoREPL(cmd.Cmd):
         if not self._ensure_pin():
             return
         if self._pico.turn_off():  # type: ignore[union-attr]
-            print("  ✓ Device OFF")
+            print(f"  {C.green('✓')} Device {C.red('OFF')}")
         else:
-            print("  ✗ Command timed out.")
+            print(f"  {C.red('✗')} Command timed out.")
 
     def do_speed(self, arg: str) -> None:
         """speed <1-5> [raw_0-100]  —  set fan speed."""
@@ -476,28 +546,63 @@ class TecnoREPL(cmd.Cmd):
         raw: Optional[int] = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
         ok = self._pico.set_speed(speed, speed_raw=raw)  # type: ignore[union-attr]
         if ok:
-            print(f"  ✓ Speed → {speed}" + (f" (raw {raw})" if raw is not None else ""))
+            speed_name = SPEEDS.get(speed, "")
+            label = f"{speed}" + (f"  {C.dim(f'({speed_name})')}" if speed_name else "")
+            print(f"  {C.green('✓')} Speed → {label}" + (f" (raw {raw})" if raw is not None else ""))
         else:
-            print("  ✗ Command timed out.")
+            print(f"  {C.red('✗')} Command timed out.")
 
     def do_mode(self, arg: str) -> None:
-        """mode <0-12>  —  set operating mode.
+        """mode [1-12]  —  set operating mode (shows menu if no argument).
 
-        Modes: 1=Recovery 2=Extraction 3=Injection 4-12=Auto/Natural
+        Modes:
+          1  Recupero           – Heat-recovery (supply + exhaust simultaneously)
+          2  Estrazione         – Extraction only (exhaust air out)
+          3  Immissione         – Supply only (fresh air in)
+          4  Auto Umidità ☀     – Auto humidity, summer
+          5  Auto Umidità ❄     – Auto humidity, winter
+          6  Comfort Estate     – Comfort summer (CO₂ + humidity controlled)
+          7  Comfort Inverno    – Comfort winter (CO₂ + humidity controlled)
+          8  CO₂ Recupero       – CO₂-triggered heat-recovery
+          9  CO₂ Estrazione     – CO₂-triggered extraction
+         10  Auto Umidità 2 ☀   – Secondary humidity auto, summer
+         11  Auto Umidità 2 ❄   – Secondary humidity auto, winter
+         12  Ricambio Naturale  – Natural air exchange (no forced ventilation)
         """
         if not self._require_device():
             return
         if not self._ensure_pin():
             return
         arg = arg.strip()
+
+        if not arg:
+            # Show interactive menu
+            print(f"\n  {C.bold('Operating modes:')}\n")
+            for num, (name, desc) in MODES.items():
+                print(f"   {C.cyan(f'[{num:2d}]')}  {name:<20s} {C.dim('–')} {desc}")
+            print()
+            if not sys.stdin.isatty():
+                return
+            try:
+                choice = input("  Select mode (1-12, or Enter to cancel): ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return
+            if not choice:
+                return
+            arg = choice
+
         if not arg.isdigit():
-            print("  Usage: mode <0-12>")
+            print(f"  {C.yellow('!')} Usage: mode <1-12>")
             return
-        ok = self._pico.set_mode(int(arg))  # type: ignore[union-attr]
+        mode_num = int(arg)
+        ok = self._pico.set_mode(mode_num)  # type: ignore[union-attr]
         if ok:
-            print(f"  ✓ Mode → {arg}")
+            mode_info = MODES.get(mode_num)
+            label = f"{mode_num}" + (f"  {C.dim(f'({mode_info[0]})')}" if mode_info else "")
+            print(f"  {C.green('✓')} Mode → {label}")
         else:
-            print("  ✗ Command timed out.")
+            print(f"  {C.red('✗')} Command timed out.")
 
     def do_humidity(self, arg: str) -> None:
         """humidity <0-100>  —  set target humidity (s_umd)."""
@@ -511,9 +616,9 @@ class TecnoREPL(cmd.Cmd):
             return
         ok = self._pico.set_humidity(int(arg))  # type: ignore[union-attr]
         if ok:
-            print(f"  ✓ Humidity → {arg}%")
+            print(f"  {C.green('✓')} Humidity → {arg}%")
         else:
-            print("  ✗ Command timed out.")
+            print(f"  {C.red('✗')} Command timed out.")
 
     def do_night(self, arg: str) -> None:
         """night [on|off]  —  toggle night mode."""
@@ -531,9 +636,9 @@ class TecnoREPL(cmd.Cmd):
             return
         ok = self._pico.set_night_mode(enabled)  # type: ignore[union-attr]
         if ok:
-            print(f"  ✓ Night mode → {'on' if enabled else 'off'}")
+            print(f"  {C.green('✓')} Night mode → {'on' if enabled else 'off'}")
         else:
-            print("  ✗ Command timed out.")
+            print(f"  {C.red('✗')} Command timed out.")
 
     def do_pin(self, arg: str) -> None:
         """pin [<value> | forget | list]  —  manage per-device PINs.
@@ -579,10 +684,10 @@ class TecnoREPL(cmd.Cmd):
         print("  Checking PIN …")
         if self._pico.check_pin(timeout=8.0):  # type: ignore[union-attr]
             self._session.set_pin(ip, arg)
-            print(f"  ✓ PIN accepted and saved for {ip}")
+            print(f"  {C.green('✓')} PIN accepted and saved for {ip}")
         else:
             self._pico.pin = old_pin  # type: ignore[union-attr]
-            print("  ✗ PIN rejected by device.  PIN not saved.")
+            print(f"  {C.red('✗')} PIN rejected by device.  PIN not saved.")
 
     def do_debug(self, arg: str) -> None:
         """debug [on|off]  —  toggle verbose TX/RX packet logging."""
@@ -606,7 +711,7 @@ class TecnoREPL(cmd.Cmd):
 
     def do_quit(self, _arg: str) -> bool:  # type: ignore[override]
         """Exit the CLI."""
-        print("  Bye!")
+        print(f"  {C.dim('Bye!')}")
         return True
 
     do_exit = do_quit
@@ -617,4 +722,4 @@ class TecnoREPL(cmd.Cmd):
 
     def default(self, line: str) -> None:
         cmd_name = line.split()[0] if line.split() else line
-        print(f"  Unknown command: {cmd_name!r}  —  type 'help' for a list.")
+        print(f"  {C.yellow('!')} Unknown command: {cmd_name!r}  —  type {C.cyan('help')} for a list.")

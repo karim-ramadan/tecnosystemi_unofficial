@@ -7,10 +7,18 @@ without writing extra Python.
 
 Operating modes (``mod`` field)
 --------------------------------
-1  Recupero (Recovery)
-2  Estrazione (Extraction)
-3  Immissione (Injection)
-4-12  Auto1..Auto8, Ricambio Naturale
+ 1  Recupero           – Heat-recovery (supply + exhaust simultaneously)
+ 2  Estrazione         – Extraction only (exhaust air out)
+ 3  Immissione         – Supply only (fresh air in)
+ 4  Auto Umidità ☀     – Auto humidity, summer
+ 5  Auto Umidità ❄     – Auto humidity, winter
+ 6  Comfort Estate     – Comfort summer (CO₂ + humidity controlled)
+ 7  Comfort Inverno    – Comfort winter (CO₂ + humidity controlled)
+ 8  CO₂ Recupero       – CO₂-triggered heat-recovery
+ 9  CO₂ Estrazione     – CO₂-triggered extraction
+10  Auto Umidità 2 ☀   – Secondary humidity auto, summer
+11  Auto Umidità 2 ❄   – Secondary humidity auto, winter
+12  Ricambio Naturale  – Natural air exchange (no forced ventilation)
 
 on_off
 ------
@@ -85,7 +93,22 @@ class PicoDevice:
     def set_mode(
         self, mode: int, on_off: Optional[int] = None, timeout: float = 5.0
     ) -> bool:
-        """Set operating mode, optionally combined with an on/off change."""
+        """Set operating mode, optionally combined with an on/off change.
+
+        Modes:
+             1  Recupero           – Heat-recovery (supply + exhaust simultaneously)
+             2  Estrazione         – Extraction only (exhaust air out)
+             3  Immissione         – Supply only (fresh air in)
+             4  Auto Umidità ☀     – Auto humidity, summer (fans on when humidity high)
+             5  Auto Umidità ❄     – Auto humidity, winter
+             6  Comfort Estate     – Comfort summer (CO₂ + humidity controlled recovery)
+             7  Comfort Inverno    – Comfort winter (CO₂ + humidity controlled recovery)
+             8  CO₂ Recupero       – CO₂-triggered heat-recovery
+             9  CO₂ Estrazione     – CO₂-triggered extraction
+            10  Auto Umidità 2 ☀   – Secondary humidity auto, summer
+            11  Auto Umidità 2 ❄   – Secondary humidity auto, winter
+            12  Ricambio Naturale  – Natural air exchange (no forced ventilation)
+        """
         fields: dict = {"mod": mode}
         if on_off is not None:
             fields["on_off"] = on_off

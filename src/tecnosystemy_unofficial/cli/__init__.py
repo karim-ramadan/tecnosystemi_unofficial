@@ -26,6 +26,7 @@ import sys
 from typing import Optional
 
 from ..idp import IDPManager
+from ._colors import C
 from ._repl import (
     TecnoREPL,
     discover,
@@ -56,7 +57,7 @@ def _build_client(ip: str, pin: str, debug: bool):
     except Exception as exc:
         if handler:
             disable_debug(handler)
-        print(f"✗ Could not connect to {ip}: {exc}", file=sys.stderr)
+        print(f"  {C.red('✗')} Could not connect to {ip}: {exc}", file=sys.stderr)
         sys.exit(1)
 
 
@@ -64,7 +65,7 @@ def _need_ip(session: SessionState, args: argparse.Namespace) -> str:
     """Return the resolved IP or exit with a helpful message."""
     ip = args.ip or session.ip
     if not ip:
-        print("✗ No device IP given.  Use --ip <address> or run 'tecno discover' first.", file=sys.stderr)
+        print(f"  {C.red('✗')} No device IP given.  Use --ip <address> or run 'tecno discover' first.", file=sys.stderr)
         sys.exit(1)
     return ip
 
@@ -162,11 +163,11 @@ def main(argv: Optional[list[str]] = None) -> None:
         print("Scanning (2s) …")
         found = discover(2.0)
         if not found:
-            print("✗ No devices found.")
+            print(f"{C.red('✗')} No devices found.")
         else:
-            print(f"\nFound {len(found)} device(s):\n")
+            print(f"\nFound {C.bold(str(len(found)))} device(s):\n")
             for ip in found:
-                print(f"  {ip}")
+                print(f"  {C.bold(ip)}")
         if handler:
             disable_debug(handler)
         return
@@ -186,56 +187,56 @@ def main(argv: Optional[list[str]] = None) -> None:
 
         elif args.cmd == "on":
             if pico.turn_on():
-                print("✓ Device ON")
+                print(f"{C.green('✓')} Device {C.green('ON')}")
             else:
-                print("✗ Timed out.")
+                print(f"{C.red('✗')} Timed out.")
                 sys.exit(2)
 
         elif args.cmd == "off":
             if pico.turn_off():
-                print("✓ Device OFF")
+                print(f"{C.green('✓')} Device {C.red('OFF')}")
             else:
-                print("✗ Timed out.")
+                print(f"{C.red('✗')} Timed out.")
                 sys.exit(2)
 
         elif args.cmd == "set":
             fields = parse_kv(" ".join(args.fields))
             if not fields:
-                print("✗ No valid key=value pairs found.", file=sys.stderr)
+                print(f"{C.red('✗')} No valid key=value pairs found.", file=sys.stderr)
                 sys.exit(1)
             if pico.update(**fields):
-                print("✓ " + " ".join(f"{k}={v}" for k, v in fields.items()))
+                print(f"{C.green('✓')} " + " ".join(f"{k}={v}" for k, v in fields.items()))
             else:
-                print("✗ Timed out.")
+                print(f"{C.red('✗')} Timed out.")
                 sys.exit(2)
 
         elif args.cmd == "speed":
             if pico.set_speed(args.value, speed_raw=args.raw):
-                print(f"✓ Speed → {args.value}")
+                print(f"{C.green('✓')} Speed → {args.value}")
             else:
-                print("✗ Timed out.")
+                print(f"{C.red('✗')} Timed out.")
                 sys.exit(2)
 
         elif args.cmd == "mode":
             if pico.set_mode(args.value):
-                print(f"✓ Mode → {args.value}")
+                print(f"{C.green('✓')} Mode → {args.value}")
             else:
-                print("✗ Timed out.")
+                print(f"{C.red('✗')} Timed out.")
                 sys.exit(2)
 
         elif args.cmd == "humidity":
             if pico.set_humidity(args.value):
-                print(f"✓ Humidity → {args.value}%")
+                print(f"{C.green('✓')} Humidity → {args.value}%")
             else:
-                print("✗ Timed out.")
+                print(f"{C.red('✗')} Timed out.")
                 sys.exit(2)
 
         elif args.cmd == "night":
             enabled = args.state == "on"
             if pico.set_night_mode(enabled):
-                print(f"✓ Night mode → {args.state}")
+                print(f"{C.green('✓')} Night mode → {args.state}")
             else:
-                print("✗ Timed out.")
+                print(f"{C.red('✗')} Timed out.")
                 sys.exit(2)
 
     finally:
