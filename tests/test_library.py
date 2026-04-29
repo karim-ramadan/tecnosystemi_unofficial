@@ -436,3 +436,183 @@ class TestPicoDevice:
         pico.send_template("pico/upd_pico.json.j2", on_off=1)
         cmd = next(p for p in sent if p.get("cmd") == "upd_pico")
         assert cmd["pin"] == "9999"
+
+
+# ---------------------------------------------------------------------------
+# SharedUDPListener + UDPTransport integration tests
+# ---------------------------------------------------------------------------
+
+
+import socket as _socket
+from tecnosystemy_unofficial.shared_listener import SharedUDPListener
+from tecnosystemy_unofficial.transport import UDPTransport
+
+# Use a high-numbered port that won't conflict with the real 40069.
+_TEST_RECV_PORT = 49069
+_TEST_SEND_PORT = 49070
+
+
+def _send_udp(data: bytes, dest_ip: str, dest_port: int, src_port: int = 0) -> None:
+    """Send a UDP datagram from an ephemeral or fixed source port."""
+    sock = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+    try:
+        if src_port:
+            sock.bind(("127.0.0.1", src_port))
+        sock.sendto(data, (dest_ip, dest_port))
+    finally:
+        sock.close()
+
+
+class TestSharedUDPListenerRouting:
+    """Tests that exercise the real SharedUDPListener socket on loopback."""
+
+    def setup_method(self):
+        # Isolate each test: evict any cached singleton for the test port.
+        with SharedUDPListener._instances_lock:
+            SharedUDPListener._instances.pop(_TEST_RECV_PORT, None)
+
+    def teardown_method(self):
+        # Force-close any lingering socket after each test.
+        with SharedUDPListener._instances_lock:
+            inst = SharedUDPListener._instances.pop(_TEST_RECV_PORT, None)
+        if inst is not None:
+            with inst._lock:
+                if inst._sock is not None:
+                    try:
+                        inst._sock.close()
+                    except Exception:
+                        pass
+                    inst._sock = None
+
+    def test_packet_reaches_registered_handler(self):
+        received = []
+        listener = SharedUDPListener.get(_TEST_RECV_PORT)
+        listener.register("127.0.0.1", received.append)
+        try:
+            _send_udp(b'{"cmd":"ping"}', "127.0.0.1", _TEST_RECV_PORT)
+            deadline = time.monotonic() + 2.0
+            while not received and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert received == [{"cmd": "ping"}]
+        finally:
+            listener.unregister("127.0.0.1", received.append)
+
+    def test_handler_for_other_ip_not_called(self):
+        """Packets from 127.0.0.1 must not reach a handler registered for a different IP."""
+        received_other = []
+        listener = SharedUDPListener.get(_TEST_RECV_PORT)
+        listener.register("10.0.0.1", received_other.append)  # will never match loopback
+        try:
+            _send_udp(b'{"cmd":"ping"}', "127.0.0.1", _TEST_RECV_PORT)
+            time.sleep(0.2)  # give the thread time to dispatch if it were going to
+            assert received_other == []
+        finally:
+            listener.unregister("10.0.0.1", received_other.append)
+
+    def test_socket_closes_after_last_unregister(self):
+        listener = SharedUDPListener.get(_TEST_RECV_PORT)
+        handler = lambda p: None
+        listener.register("127.0.0.1", handler)
+        assert listener._sock is not None
+        listener.unregister("127.0.0.1", handler)
+        time.sleep(0.05)
+        assert listener._sock is None
+
+    def test_socket_reopens_after_reregister(self):
+        listener = SharedUDPListener.get(_TEST_RECV_PORT)
+        h = lambda p: None
+        listener.register("127.0.0.1", h)
+        listener.unregister("127.0.0.1", h)
+        time.sleep(0.05)
+        assert listener._sock is None
+        # Re-register — socket should reopen
+        listener.register("127.0.0.1", h)
+        assert listener._sock is not None
+        listener.unregister("127.0.0.1", h)
+
+    def test_two_handlers_same_ip_both_receive(self):
+        r1, r2 = [], []
+        listener = SharedUDPListener.get(_TEST_RECV_PORT)
+        listener.register("127.0.0.1", r1.append)
+        listener.register("127.0.0.1", r2.append)
+        try:
+            _send_udp(b'{"val":1}', "127.0.0.1", _TEST_RECV_PORT)
+            deadline = time.monotonic() + 2.0
+            while (not r1 or not r2) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert r1 == [{"val": 1}]
+            assert r2 == [{"val": 1}]
+        finally:
+            listener.unregister("127.0.0.1", r1.append)
+            listener.unregister("127.0.0.1", r2.append)
+
+
+class TestUDPTransportShared:
+    """Tests that UDPTransport instances share the listener without conflicts."""
+
+    def setup_method(self):
+        with SharedUDPListener._instances_lock:
+            SharedUDPListener._instances.pop(_TEST_RECV_PORT, None)
+
+    def teardown_method(self):
+        with SharedUDPListener._instances_lock:
+            inst = SharedUDPListener._instances.pop(_TEST_RECV_PORT, None)
+        if inst is not None:
+            with inst._lock:
+                if inst._sock is not None:
+                    try:
+                        inst._sock.close()
+                    except Exception:
+                        pass
+                    inst._sock = None
+
+    def test_two_transports_start_without_conflict(self):
+        t1 = UDPTransport("192.168.1.10", _TEST_SEND_PORT, _TEST_RECV_PORT)
+        t2 = UDPTransport("192.168.1.11", _TEST_SEND_PORT, _TEST_RECV_PORT)
+        t1.start()
+        t2.start()  # must not raise "address already in use"
+        t1.stop()
+        t2.stop()
+
+    def test_packets_routed_to_correct_transport(self):
+        """
+        Packets arriving from 127.0.0.1 should only be dispatched to the
+        transport registered for that IP, not to others.
+        """
+        received_loopback = []
+        received_other = []
+
+        t_loopback = UDPTransport("127.0.0.1", _TEST_SEND_PORT, _TEST_RECV_PORT)
+        t_loopback.add_packet_handler(received_loopback.append)
+
+        t_other = UDPTransport("10.0.0.99", _TEST_SEND_PORT, _TEST_RECV_PORT)
+        t_other.add_packet_handler(received_other.append)
+
+        t_loopback.start()
+        t_other.start()
+        try:
+            _send_udp(b'{"cmd":"hello"}', "127.0.0.1", _TEST_RECV_PORT)
+            deadline = time.monotonic() + 2.0
+            while not received_loopback and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert received_loopback == [{"cmd": "hello"}]
+            assert received_other == []
+        finally:
+            t_loopback.stop()
+            t_other.stop()
+
+    def test_stop_does_not_affect_other_transport(self):
+        """Stopping one transport must not close the shared socket used by another."""
+        received = []
+        t1 = UDPTransport("10.0.0.1", _TEST_SEND_PORT, _TEST_RECV_PORT)
+        t2 = UDPTransport("127.0.0.1", _TEST_SEND_PORT, _TEST_RECV_PORT)
+        t2.add_packet_handler(received.append)
+        t1.start()
+        t2.start()
+        t1.stop()  # t2 must still work
+        _send_udp(b'{"alive":1}', "127.0.0.1", _TEST_RECV_PORT)
+        deadline = time.monotonic() + 2.0
+        while not received and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert received == [{"alive": 1}]
+        t2.stop()

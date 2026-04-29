@@ -9,3 +9,5 @@ wheels/
 # Virtual environments
 .venv
 .idea
+.tecno_idp.json
+java_code/
