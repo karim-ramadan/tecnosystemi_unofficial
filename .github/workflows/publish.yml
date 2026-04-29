@@ -1,17 +1,35 @@
 name: Publish to PyPI
 
 on:
-  push:
-    tags:
-      - "v*"   # triggers on v0.1.0, v1.2.3, etc.
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
 
 jobs:
-  build:
-    name: Build distribution
+  release:
+    name: Bump version, tag & publish
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: write   # push commit + tag
+      id-token: write   # OIDC trusted publisher (no API token needed)
+
+    environment:
+      name: pypi
+      url: https://pypi.org/p/tecnosystemy-unofficial
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so we can push tags
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -21,34 +39,27 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
+      - name: Bump version in pyproject.toml
+        run: uv version --bump ${{ inputs.bump }}
+
+      - name: Read new version
+        id: version
+        run: echo "value=$(uv version --short)" >> "$GITHUB_OUTPUT"
+
+      - name: Commit version bump
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml
+          git commit -m "chore: bump version to ${{ steps.version.outputs.value }}"
+
+      - name: Create and push tag
+        run: |
+          git tag "v${{ steps.version.outputs.value }}"
+          git push origin HEAD --follow-tags
+
       - name: Build package
         run: uv build
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: dist/
-
-  publish:
-    name: Publish to PyPI
-    needs: build
-    runs-on: ubuntu-latest
-
-    # Required for OIDC trusted publisher authentication (no API token needed)
-    permissions:
-      id-token: write
-
-    environment:
-      name: pypi
-      url: https://pypi.org/p/tecnosystemy-unofficial
-
-    steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
