@@ -135,7 +135,7 @@ class TecnoClient:
         effective_timeout = timeout if timeout is not None else self.timeout
         payload = dict(payload)  # never mutate the caller's dict
 
-        idp = self.idp_manager.acquire()
+        idp = await self.idp_manager.acquire()
         payload["idp"] = idp
         payload["frm"] = "app"
 

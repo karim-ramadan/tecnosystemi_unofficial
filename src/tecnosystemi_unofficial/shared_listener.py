@@ -179,7 +179,7 @@ class SharedUDPListener:
             src_ip = addr[0]
             logger.debug("SharedUDPListener received from %s: %s", addr, packet)
 
-            with self._lock:
+            with self._lock: #needed to ensure handlers are not updated while beeing used
                 handlers = list(self._handlers.get(src_ip, []))
                 raw_handlers = list(self._raw_handlers)
 

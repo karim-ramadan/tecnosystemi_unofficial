@@ -29,89 +29,71 @@ from tecnosystemi_unofficial.templates_loader import TemplateLoader
 
 
 class TestIDPManager:
-    def test_starts_at_one(self):
+    async def test_starts_at_one(self):
         mgr = IDPManager()
-        idp = mgr.acquire()
+        idp = await mgr.acquire()
         assert idp == 1
 
-    def test_increments(self):
+    async def test_increments(self):
         mgr = IDPManager()
-        mgr.acquire()  # 1, not released
+        await mgr.acquire()  # 1, not released
         mgr.release(1)
-        idp2 = mgr.acquire()
+        idp2 = await mgr.acquire()
         assert idp2 == 2
 
-    def test_wraps_at_max(self):
+    async def test_wraps_at_max(self):
         mgr = IDPManager()
-        mgr._store.save(IDPManager.MAX_IDP)  # next candidate = 500
-        idp = mgr.acquire()
+        await mgr._store.save(IDPManager.MAX_IDP)  # next candidate = 500
+        idp = await mgr.acquire()
         assert idp == IDPManager.MAX_IDP
         mgr.release(idp)
-        idp2 = mgr.acquire()
+        idp2 = await mgr.acquire()
         assert idp2 == 1  # wrapped
 
-    def test_skips_in_flight_on_wrap(self):
+    async def test_skips_in_flight_on_wrap(self):
         mgr = IDPManager()
         # Manually mark 500 as in-flight
         mgr._in_flight.add(IDPManager.MAX_IDP)
-        mgr._store.save(IDPManager.MAX_IDP)
-        idp = mgr.acquire()
+        await mgr._store.save(IDPManager.MAX_IDP)
+        idp = await mgr.acquire()
         assert idp == 1  # skipped 500, landed on 1
 
-    def test_thread_safety(self):
+    async def test_concurrent_acquire_unique(self):
         mgr = IDPManager()
-        results = []
-        errors = []
-
-        def worker():
-            try:
-                idp = mgr.acquire()
-                time.sleep(0.01)
-                results.append(idp)
-                mgr.release(idp)
-            except Exception as e:
-                errors.append(e)
-
-        threads = [threading.Thread(target=worker) for _ in range(20)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        assert not errors
+        results = await asyncio.gather(*[mgr.acquire() for _ in range(20)])
         assert len(set(results)) == len(results), "Duplicate IDPs allocated"
 
-    def test_raises_when_all_in_flight(self):
+    async def test_raises_when_all_in_flight(self):
         mgr = IDPManager()
         mgr._in_flight = set(range(1, IDPManager.MAX_IDP + 1))
         with pytest.raises(RuntimeError, match="in-flight"):
-            mgr.acquire()
+            await mgr.acquire()
 
 
 class TestFileIDPStore:
-    def test_persists_and_reads(self, tmp_path):
+    async def test_persists_and_reads(self, tmp_path):
         path = tmp_path / "idp.json"
         store = FileIDPStore(path)
-        assert store.get() == 1  # default
-        store.save(42)
+        assert await store.get() == 1  # default
+        await store.save(42)
         store2 = FileIDPStore(path)
-        assert store2.get() == 42
+        assert await store2.get() == 42
 
-    def test_handles_corrupt_file(self, tmp_path):
+    async def test_handles_corrupt_file(self, tmp_path):
         path = tmp_path / "idp.json"
         path.write_text("not json")
         store = FileIDPStore(path)
-        assert store.get() == 1
+        assert await store.get() == 1
 
-    def test_file_idp_manager(self, tmp_path):
+    async def test_file_idp_manager(self, tmp_path):
         path = tmp_path / "idp.json"
         mgr = IDPManager(backend="file", path=path)
-        idp = mgr.acquire()
+        idp = await mgr.acquire()
         assert idp == 1
         mgr.release(idp)
         # Next session reads from file
         mgr2 = IDPManager(backend="file", path=path)
-        idp2 = mgr2.acquire()
+        idp2 = await mgr2.acquire()
         assert idp2 == 2
 
 

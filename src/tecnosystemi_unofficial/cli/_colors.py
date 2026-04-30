@@ -76,6 +76,13 @@ class Colors:
         return cls._wrap(cls._BLUE, s)
 
     @classmethod
+    def rgb(cls, r: int, g: int, b: int, s: str) -> str:
+        """Apply a 24-bit (true-color) foreground to *s*."""
+        if not cls.enabled:
+            return s
+        return f"\033[38;2;{r};{g};{b}m{s}{cls._RESET}"
+
+    @classmethod
     def prompt(cls, s: str) -> str:
         """Wrap *s* for use in a readline prompt (invisible-sequence wrappers)."""
         if not cls.enabled:

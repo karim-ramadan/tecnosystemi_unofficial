@@ -10,6 +10,7 @@ Rules from the firmware:
 - Two backends: memory (default, starts fresh each process) or file (persists across restarts)
 """
 
+import asyncio
 import json
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -18,46 +19,57 @@ from typing import Optional
 
 class IDPStore(ABC):
     @abstractmethod
-    def get(self) -> int: ...
+    async def get(self) -> int: ...
 
     @abstractmethod
-    def save(self, value: int): ...
+    async def save(self, value: int) -> None: ...
 
 
 class MemoryIDPStore(IDPStore):
     def __init__(self, start: int = 1):
         self._value = start
 
-    def get(self) -> int:
+    async def get(self) -> int:
         return self._value
 
-    def save(self, value: int):
+    async def save(self, value: int) -> None:
         self._value = value
 
 
 class FileIDPStore(IDPStore):
-    """Persists the next IDP to a JSON file so it survives process restarts."""
+    """Persists the next IDP to a JSON file so it survives process restarts.
+
+    All file I/O runs in a thread-pool executor so it never blocks the event loop.
+    Directory creation is deferred to the first write.
+    """
 
     def __init__(self, path: Path):
         self._path = Path(path)
-        self._path.parent.mkdir(parents=True, exist_ok=True)
 
-    def get(self) -> int:
+    def _read(self) -> int:
         try:
             return json.loads(self._path.read_text()).get("idp", 1)
         except (FileNotFoundError, json.JSONDecodeError, KeyError, ValueError):
             return 1
 
-    def save(self, value: int):
+    def _write(self, value: int) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
         self._path.write_text(json.dumps({"idp": value}))
+
+    async def get(self) -> int:
+        return await asyncio.to_thread(self._read)
+
+    async def save(self, value: int) -> None:
+        await asyncio.to_thread(self._write, value)
 
 
 class IDPManager:
     """
     IDP allocator with in-flight tracking.
 
-    Each device should have its own IDPManager instance.  All calls happen on
-    the asyncio event loop thread, so no locking is needed.
+    Each device should have its own IDPManager instance.  ``acquire`` is
+    protected by an asyncio lock so concurrent coroutines cannot race on
+    the store read/write sequence.
     """
 
     MAX_IDP = 500
@@ -69,6 +81,7 @@ class IDPManager:
             path:    Required when backend="file". Path to the state file.
         """
         self._in_flight: set[int] = set()
+        self._lock = asyncio.Lock()
         if backend == "file":
             if path is None:
                 raise ValueError("path is required for the 'file' backend")
@@ -76,24 +89,29 @@ class IDPManager:
         else:
             self._store = MemoryIDPStore()
 
-    def acquire(self) -> int:
+    async def acquire(self) -> int:
         """
         Reserve the next available IDP and mark it in-flight.
 
         Raises RuntimeError if all 500 slots are currently in use.
         """
-        candidate = self._store.get()
-        for _ in range(self.MAX_IDP):
-            if candidate not in self._in_flight:
-                break
-            candidate = (candidate % self.MAX_IDP) + 1
-        else:
-            raise RuntimeError(
-                "All IDP slots are in-flight. Cannot send a new command."
-            )
-        self._in_flight.add(candidate)
-        self._store.save((candidate % self.MAX_IDP) + 1)
-        return candidate
+        async with self._lock:
+            candidate = await self._store.get()
+            for _ in range(self.MAX_IDP):
+                if candidate not in self._in_flight:
+                    break
+                candidate = (candidate % self.MAX_IDP) + 1
+            else:
+                raise RuntimeError(
+                    "All IDP slots are in-flight. Cannot send a new command."
+                )
+            self._in_flight.add(candidate)
+            try:
+                await self._store.save((candidate % self.MAX_IDP) + 1)
+            except Exception:
+                self._in_flight.discard(candidate)
+                raise
+            return candidate
 
     def release(self, idp: int):
         """Mark an IDP as no longer in-flight."""

@@ -49,6 +49,30 @@ MODES: dict[int, tuple[str, str]] = {
 
 SPEEDS: dict[int, str] = {1: "Min", 2: "Low", 3: "Medium", 4: "High", 5: "Max"}
 
+# LED colour associated with each operating mode (name, hex).
+# Source: Manuale CLI00180, p. 24.
+LED_COLORS: dict[int, tuple[str, str]] = {
+    1:  ("Turchese",      "#4DB6AC"),  # Recupero Calore
+    2:  ("Verde",         "#5CB85C"),  # Estrazione
+    3:  ("Fucsia",        "#D81B60"),  # Immissione
+    4:  ("Giallo",        "#E6DC2A"),  # Soglia Umidità → Recupero Calore
+    5:  ("Bianco",        "#FFFFFF"),  # Soglia Umidità → Estrazione
+    6:  ("Viola",         "#5B4B8A"),  # Soglia CO₂ Umidità → Recupero Calore
+    7:  ("Verde (CO₂)",   "#7FBF3F"),  # Soglia CO₂ Umidità → Estrazione
+    8:  ("Blu",           "#466FA6"),  # Soglia CO₂ → Recupero Calore
+    9:  ("Blu scuro",     "#2F5597"),  # Soglia CO₂ → Estrazione
+    10: ("Arancione",     "#E67E2E"),  # Free Cooling
+    11: ("Viola chiaro",  "#B784A7"),  # Free Heating
+    12: ("Grigio",        "#9E9E9E"),  # Ricircolo Naturale
+}
+
+
+def _led_swatch(hex_color: str) -> str:
+    """Return a coloured '■' swatch for *hex_color* (e.g. '#4DB6AC')."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return C.rgb(r, g, b, "■")
+
 
 # ---------------------------------------------------------------------------
 # Module-level helpers
@@ -167,8 +191,10 @@ def print_state(state: Optional[dict]) -> None:
             value = C.green("ON") if raw == 1 else C.red("OFF")
         elif k == "mod":
             mode_info = MODES.get(raw)
+            led = LED_COLORS.get(raw)
             if mode_info:
-                value = f"{raw}  {C.dim(f'({mode_info[0]} – {mode_info[1]})')}"
+                swatch = f" {_led_swatch(led[1])} {C.dim(led[0])}" if led else ""
+                value = f"{raw}  {C.dim(f'({mode_info[0]} – {mode_info[1]})')}{swatch}"
             else:
                 value = str(raw)
         elif k == "speed":
@@ -580,7 +606,9 @@ class TecnoREPL(cmd.Cmd):
             # Show interactive menu
             print(f"\n  {C.bold('Operating modes:')}\n")
             for num, (name, desc) in MODES.items():
-                print(f"   {C.cyan(f'[{num:2d}]')}  {name:<20s} {C.dim('–')} {desc}")
+                led = LED_COLORS.get(num)
+                color_str = f"  {_led_swatch(led[1])} {C.dim(led[0])}" if led else ""
+                print(f"   {C.cyan(f'[{num:2d}]')}  {name:<20s} {C.dim('–')} {desc}{color_str}")
             print()
             if not sys.stdin.isatty():
                 return
@@ -600,7 +628,9 @@ class TecnoREPL(cmd.Cmd):
         ok = asyncio.run(self._pico.set_mode(mode_num))  # type: ignore[union-attr]
         if ok:
             mode_info = MODES.get(mode_num)
-            label = f"{mode_num}" + (f"  {C.dim(f'({mode_info[0]})')}" if mode_info else "")
+            led = LED_COLORS.get(mode_num)
+            swatch = f"  {_led_swatch(led[1])} {C.dim(led[0])}" if led else ""
+            label = f"{mode_num}" + (f"  {C.dim(f'({mode_info[0]})')}" if mode_info else "") + swatch
             print(f"  {C.green('✓')} Mode → {label}")
         else:
             print(f"  {C.red('✗')} Command timed out.")

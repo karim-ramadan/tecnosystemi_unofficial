@@ -29,6 +29,23 @@ from typing import Optional
 
 from ..client import TecnoClient
 
+# LED colour associated with each operating mode: (colour_name, hex_code).
+# Source: Manuale CLI00180, p. 24.
+MODE_LED_COLORS: dict[int, tuple[str, str]] = {
+    1:  ("Turchese",      "#4DB6AC"),  # Recupero Calore
+    2:  ("Verde",         "#5CB85C"),  # Estrazione
+    3:  ("Fucsia",        "#D81B60"),  # Immissione
+    4:  ("Giallo",        "#E6DC2A"),  # Soglia Umidità → Recupero Calore
+    5:  ("Bianco",        "#FFFFFF"),  # Soglia Umidità → Estrazione
+    6:  ("Viola",         "#5B4B8A"),  # Soglia CO₂ Umidità → Recupero Calore
+    7:  ("Verde (CO₂)",   "#7FBF3F"),  # Soglia CO₂ Umidità → Estrazione
+    8:  ("Blu",           "#466FA6"),  # Soglia CO₂ → Recupero Calore
+    9:  ("Blu scuro",     "#2F5597"),  # Soglia CO₂ → Estrazione
+    10: ("Arancione",     "#E67E2E"),  # Free Cooling
+    11: ("Viola chiaro",  "#B784A7"),  # Free Heating
+    12: ("Grigio",        "#9E9E9E"),  # Ricircolo Naturale
+}
+
 
 class PicoDevice:
     """
@@ -150,6 +167,17 @@ class PicoDevice:
             await pico.update(on_off=1, speed=3, mod=2)
         """
         return await self._upd_pico(fields, timeout=timeout)
+
+    @staticmethod
+    def get_mode_led_color(mode: int) -> Optional[tuple[str, str]]:
+        """Return the LED ``(colour_name, hex_code)`` for *mode*, or ``None``.
+
+        Example::
+
+            name, hex_code = PicoDevice.get_mode_led_color(1)
+            # → ("Turchese", "#4DB6AC")
+        """
+        return MODE_LED_COLORS.get(mode)
 
     # ------------------------------------------------------------------
     # Template-based interface
