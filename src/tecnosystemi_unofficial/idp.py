@@ -11,7 +11,6 @@ Rules from the firmware:
 """
 
 import json
-import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
@@ -55,10 +54,10 @@ class FileIDPStore(IDPStore):
 
 class IDPManager:
     """
-    Thread-safe IDP allocator with in-flight tracking.
+    IDP allocator with in-flight tracking.
 
-    Tracks which IDs are currently in-flight so that wraparound can never
-    hand out an ID that is still waiting for a response.
+    Each device should have its own IDPManager instance.  All calls happen on
+    the asyncio event loop thread, so no locking is needed.
     """
 
     MAX_IDP = 500
@@ -69,7 +68,6 @@ class IDPManager:
             backend: "memory" (default) or "file" for persistent storage.
             path:    Required when backend="file". Path to the state file.
         """
-        self._lock = threading.Lock()
         self._in_flight: set[int] = set()
         if backend == "file":
             if path is None:
@@ -84,26 +82,23 @@ class IDPManager:
 
         Raises RuntimeError if all 500 slots are currently in use.
         """
-        with self._lock:
-            candidate = self._store.get()
-            for _ in range(self.MAX_IDP):
-                if candidate not in self._in_flight:
-                    break
-                candidate = (candidate % self.MAX_IDP) + 1
-            else:
-                raise RuntimeError(
-                    "All IDP slots are in-flight. Cannot send a new command."
-                )
-            self._in_flight.add(candidate)
-            self._store.save((candidate % self.MAX_IDP) + 1)
-            return candidate
+        candidate = self._store.get()
+        for _ in range(self.MAX_IDP):
+            if candidate not in self._in_flight:
+                break
+            candidate = (candidate % self.MAX_IDP) + 1
+        else:
+            raise RuntimeError(
+                "All IDP slots are in-flight. Cannot send a new command."
+            )
+        self._in_flight.add(candidate)
+        self._store.save((candidate % self.MAX_IDP) + 1)
+        return candidate
 
     def release(self, idp: int):
         """Mark an IDP as no longer in-flight."""
-        with self._lock:
-            self._in_flight.discard(idp)
+        self._in_flight.discard(idp)
 
     @property
     def in_flight_count(self) -> int:
-        with self._lock:
-            return len(self._in_flight)
+        return len(self._in_flight)

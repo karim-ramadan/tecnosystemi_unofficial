@@ -46,7 +46,6 @@ class TecnoClient:
         ip:            Device IP address.
         send_port:     UDP port the *device* listens on (commands go here).
         recv_port:     UDP port the *client* listens on (responses come here).
-        idp_manager:   Custom IDPManager.  Defaults to in-memory allocation.
         template_dirs: Extra Jinja2 template directories (searched first).
         timeout:       Default timeout in seconds for waiting on responses.
         buffer_size:   Number of received packets to keep in the rolling buffer.
