@@ -19,7 +19,7 @@ from ..devices import PicoDevice
 from ..idp import IDPManager
 from ..shared_listener import SharedUDPListener
 from ._colors import C
-from ._session import CONFIG_DIR, HISTORY_FILE, IDP_FILE, SessionState
+from ._session import CONFIG_DIR, HISTORY_FILE, SessionState
 
 _SEND_PORT = 40070
 _RECV_PORT = 40069
@@ -33,37 +33,37 @@ _DEBUG_TAG = "_tecno_cli_debug"
 # ---------------------------------------------------------------------------
 
 MODES: dict[int, tuple[str, str]] = {
-    1:  ("Recupero",          "Heat-recovery: simultaneous supply + exhaust"),
-    2:  ("Estrazione",        "Extraction only: exhaust air out"),
-    3:  ("Immissione",        "Supply only: fresh air in"),
-    4:  ("Auto Umidità ☀",    "Auto humidity – summer (fans activate when humidity is high)"),
-    5:  ("Auto Umidità ❄",    "Auto humidity – winter"),
-    6:  ("Comfort Estate",    "Comfort summer: CO₂ + humidity controlled heat-recovery"),
-    7:  ("Comfort Inverno",   "Comfort winter: CO₂ + humidity controlled heat-recovery"),
-    8:  ("CO₂ Recupero",      "CO₂-triggered heat-recovery ventilation"),
-    9:  ("CO₂ Estrazione",    "CO₂-triggered extraction only"),
-    10: ("Auto Umidità 2 ☀",  "Secondary humidity auto – summer"),
-    11: ("Auto Umidità 2 ❄",  "Secondary humidity auto – winter"),
+    1: ("Recupero", "Heat-recovery: simultaneous supply + exhaust"),
+    2: ("Estrazione", "Extraction only: exhaust air out"),
+    3: ("Immissione", "Supply only: fresh air in"),
+    4: ("Auto Umidità ☀", "Auto humidity – summer (fans activate when humidity is high)"),
+    5: ("Auto Umidità ❄", "Auto humidity – winter"),
+    6: ("Comfort Estate", "Comfort summer: CO₂ + humidity controlled heat-recovery"),
+    7: ("Comfort Inverno", "Comfort winter: CO₂ + humidity controlled heat-recovery"),
+    8: ("CO₂ Recupero", "CO₂-triggered heat-recovery ventilation"),
+    9: ("CO₂ Estrazione", "CO₂-triggered extraction only"),
+    10: ("Auto Umidità 2 ☀", "Secondary humidity auto – summer"),
+    11: ("Auto Umidità 2 ❄", "Secondary humidity auto – winter"),
     12: ("Ricambio Naturale", "Natural air exchange (minimal/no forced ventilation)"),
 }
 
-SPEEDS: dict[int, str] = {1: "Min", 2: "Low", 3: "Medium", 4: "High", 5: "Max"}
+SPEEDS: dict[int, str] = {1: "Min", 2: "Medium", 3: "Max"}
 
 # LED colour associated with each operating mode (name, hex).
 # Source: Manuale CLI00180, p. 24.
 LED_COLORS: dict[int, tuple[str, str]] = {
-    1:  ("Turchese",      "#4DB6AC"),  # Recupero Calore
-    2:  ("Verde",         "#5CB85C"),  # Estrazione
-    3:  ("Fucsia",        "#D81B60"),  # Immissione
-    4:  ("Giallo",        "#E6DC2A"),  # Soglia Umidità → Recupero Calore
-    5:  ("Bianco",        "#FFFFFF"),  # Soglia Umidità → Estrazione
-    6:  ("Viola",         "#5B4B8A"),  # Soglia CO₂ Umidità → Recupero Calore
-    7:  ("Verde (CO₂)",   "#7FBF3F"),  # Soglia CO₂ Umidità → Estrazione
-    8:  ("Blu",           "#466FA6"),  # Soglia CO₂ → Recupero Calore
-    9:  ("Blu scuro",     "#2F5597"),  # Soglia CO₂ → Estrazione
-    10: ("Arancione",     "#E67E2E"),  # Free Cooling
-    11: ("Viola chiaro",  "#B784A7"),  # Free Heating
-    12: ("Grigio",        "#9E9E9E"),  # Ricircolo Naturale
+    1: ("Turchese", "#4DB6AC"),  # Recupero Calore
+    2: ("Verde", "#5CB85C"),  # Estrazione
+    3: ("Fucsia", "#D81B60"),  # Immissione
+    4: ("Giallo", "#E6DC2A"),  # Soglia Umidità → Recupero Calore
+    5: ("Bianco", "#FFFFFF"),  # Soglia Umidità → Estrazione
+    6: ("Viola", "#5B4B8A"),  # Soglia CO₂ Umidità → Recupero Calore
+    7: ("Verde (CO₂)", "#7FBF3F"),  # Soglia CO₂ Umidità → Estrazione
+    8: ("Blu", "#466FA6"),  # Soglia CO₂ → Recupero Calore
+    9: ("Blu scuro", "#2F5597"),  # Soglia CO₂ → Estrazione
+    10: ("Arancione", "#E67E2E"),  # Free Cooling
+    11: ("Viola chiaro", "#B784A7"),  # Free Heating
+    12: ("Grigio", "#9E9E9E"),  # Ricircolo Naturale
 }
 
 
@@ -119,7 +119,9 @@ def register_device(ip: str, pin: Optional[str], session: SessionState) -> bool:
 
     Returns True on success.  Prints status to stdout.
     """
-    idp_mgr = IDPManager(backend="file", path=IDP_FILE)
+    # idp_mgr = IDPManager(backend="file", path=IDP_FILE)
+    idp_mgr = IDPManager(backend="memory")
+
     client = TecnoClient(ip=ip, idp_manager=idp_mgr, timeout=12.0)
     try:
         client.start()
@@ -139,7 +141,8 @@ def register_device(ip: str, pin: Optional[str], session: SessionState) -> bool:
             print(f"  {C.green('✓')} PIN accepted and saved for {ip}")
         session.ip = ip
         session.save()
-        print(f"  {C.green('✓')} Registered {C.bold(ip)}" + ("" if pin else f"  {C.dim('(no PIN — run: tecno --ip ' + ip + ' pin <value>)')}"))
+        print(f"  {C.green('✓')} Registered {C.bold(ip)}" + (
+            "" if pin else f"  {C.dim('(no PIN — run: tecno --ip ' + ip + ' pin <value>)')}"))
         return True
     finally:
         client.stop()
@@ -177,20 +180,20 @@ def disable_debug(handler: logging.Handler) -> None:
 
 
 _STATE_DISPLAY = [
-    ("on_off",    lambda v: "ON" if v == 1 else "OFF"),
-    ("mod",       str),
-    ("speed",     str),
-    ("spd_row",   str),
-    ("spd_rich",  str),
-    ("umd",       str),
-    ("s_umd",     str),
-    ("AMB_tmpr",  lambda v: f"{v} °C"),
-    ("EXT_tmpr",  lambda v: f"{v} °C"),
+    ("on_off", lambda v: "ON" if v == 1 else "OFF"),
+    ("mod", str),
+    ("speed", str),
+    ("spd_row", str),
+    ("spd_rich", str),
+    ("umd", str),
+    ("s_umd", str),
+    ("AMB_tmpr", lambda v: f"{v} °C"),
+    ("EXT_tmpr", lambda v: f"{v} °C"),
     ("night_mod", lambda v: "on" if v else "off"),
-    ("m_crono",   str),
-    ("fw_ver",    str),
+    ("m_crono", str),
+    ("fw_ver", str),
     ("has_slave", str),
-    ("vr",        str),
+    ("vr", str),
 ]
 _KNOWN_STATE = {k for k, _ in _STATE_DISPLAY} | {"idp", "frm", "res", "cmd", "pin"}
 
@@ -281,10 +284,10 @@ class TecnoREPL(cmd.Cmd):
     )
 
     def __init__(
-        self,
-        initial_ip: str = "",
-        initial_pin: str = "",
-        debug: bool = False,
+            self,
+            initial_ip: str = "",
+            initial_pin: str = "",
+            debug: bool = False,
     ) -> None:
         super().__init__()
         self._session = SessionState.load()
@@ -350,7 +353,7 @@ class TecnoREPL(cmd.Cmd):
 
         client = None
         try:
-            idp_mgr = IDPManager(backend="file", path=IDP_FILE)
+            idp_mgr = IDPManager(backend="memory")
             client = TecnoClient(ip=ip, idp_manager=idp_mgr, timeout=12.0)
             client.start()
             self._client = client
@@ -361,7 +364,8 @@ class TecnoREPL(cmd.Cmd):
             self._update_prompt()
             if not silent:
                 stored = pin != "-1"
-                print(f"  {C.green('✓')} Connected to {C.bold(ip)}" + ("" if stored else f"  {C.dim('(no PIN stored — run \"pin <value>\" to save one)')}"))
+                print(f"  {C.green('✓')} Connected to {C.bold(ip)}" + (
+                    "" if stored else f"  {C.dim('(no PIN stored — run \"pin <value>\" to save one)')}"))
             return True
         except Exception as exc:
             if client is not None:
@@ -622,14 +626,14 @@ class TecnoREPL(cmd.Cmd):
             print(f"  {C.red('✗')} Command timed out.")
 
     def do_speed(self, arg: str) -> None:
-        """speed <1-5> [raw_0-100]  —  set fan speed."""
+        """speed <1-3> [raw_0-100]  —  set fan speed."""
         if not self._require_device():
             return
         if not self._ensure_pin():
             return
         parts = arg.strip().split()
         if not parts or not parts[0].isdigit():
-            print("  Usage: speed <1-5> [raw_0-100]")
+            print("  Usage: speed <1-3> [raw_0-100]")
             return
         speed = int(parts[0])
         raw: Optional[int] = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None

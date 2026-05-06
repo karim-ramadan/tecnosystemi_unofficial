@@ -26,7 +26,7 @@ class IDPStore(ABC):
 
 
 class MemoryIDPStore(IDPStore):
-    def __init__(self, start: int = 1):
+    def __init__(self, start: int = 100):
         self._value = start
 
     async def get(self) -> int:
@@ -43,12 +43,13 @@ class FileIDPStore(IDPStore):
     Directory creation is deferred to the first write.
     """
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, start: int = 100):
         self._path = Path(path)
+        self._start: int = start
 
     def _read(self) -> int:
         try:
-            return json.loads(self._path.read_text()).get("idp", 1)
+            return json.loads(self._path.read_text()).get("idp", self._start)
         except (FileNotFoundError, json.JSONDecodeError, KeyError, ValueError):
             return 1
 
@@ -73,6 +74,7 @@ class IDPManager:
     """
 
     MAX_IDP = 500
+    MIN_IDP = 100 #Low idps are more likely to be used by other apps, so we start higher to reduce collision chances.
 
     def __init__(self, backend: str = "memory", path: Optional[Path] = None):
         """
@@ -85,9 +87,9 @@ class IDPManager:
         if backend == "file":
             if path is None:
                 raise ValueError("path is required for the 'file' backend")
-            self._store: IDPStore = FileIDPStore(path)
+            self._store: IDPStore = FileIDPStore(path, self.MIN_IDP)
         else:
-            self._store = MemoryIDPStore()
+            self._store = MemoryIDPStore(self.MIN_IDP)
 
     async def acquire(self) -> int:
         """
@@ -100,7 +102,7 @@ class IDPManager:
             for _ in range(self.MAX_IDP):
                 if candidate not in self._in_flight:
                     break
-                candidate = (candidate % self.MAX_IDP) + 1
+                candidate = (candidate % (self.MAX_IDP - self.MIN_IDP)) + self.MIN_IDP + 1
             else:
                 raise RuntimeError(
                     "All IDP slots are in-flight. Cannot send a new command."

@@ -51,7 +51,7 @@ def _build_client(ip: str, pin: str, debug: bool):
         handler = enable_debug()
 
     try:
-        idp_mgr = IDPManager(backend="file", path=IDP_FILE)
+        idp_mgr = IDPManager(backend="memory")
         client = TecnoClient(ip=ip, idp_manager=idp_mgr, timeout=12.0)
         client.start()
         pico = PicoDevice(client, pin=pin)
@@ -137,7 +137,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     p_set = sub.add_parser("set", help="Update device fields: set key=value ...")
     p_set.add_argument("fields", nargs="+", metavar="key=value")
 
-    p_speed = sub.add_parser("speed", help="Set fan speed (1-5)")
+    p_speed = sub.add_parser("speed", help="Set fan speed (1-3)")
     p_speed.add_argument("value", type=int)
     p_speed.add_argument("raw", nargs="?", type=int, default=None, metavar="RAW")
 

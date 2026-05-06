@@ -101,7 +101,7 @@ class PicoDevice:
     async def set_speed(
         self, speed: int, speed_raw: Optional[int] = None, timeout: float = 5.0
     ) -> bool:
-        """Set fan speed.  Optionally also set the raw speed register."""
+        """Set fan speed (1–3).  Optionally also set the raw speed register."""
         fields: dict = {"speed": speed}
         if speed_raw is not None:
             fields["spd_row"] = speed_raw

@@ -439,10 +439,10 @@ class TestPicoDevice:
     async def test_update_multiple_fields(self):
         loop = asyncio.get_running_loop()
         pico, sent = self._make_pico({"upd_pico": {"res": 99}}, loop=loop)
-        await pico.update(on_off=1, speed=5, mod=3)
+        await pico.update(on_off=1, speed=3, mod=3)
         cmd = next(p for p in sent if p.get("cmd") == "upd_pico")
         assert cmd["on_off"] == 1
-        assert cmd["speed"] == 5
+        assert cmd["speed"] == 3
         assert cmd["mod"] == 3
 
     async def test_turn_on_returns_false_on_timeout(self):
