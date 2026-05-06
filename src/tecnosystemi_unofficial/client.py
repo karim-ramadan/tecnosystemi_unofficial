@@ -269,7 +269,7 @@ class TecnoClient:
             session = self._sessions.get(idp)
 
         if session is None:
-            logger.debug("Received packet for unknown/expired idp=%d, ignoring", idp)
+            logger.debug("Received packet for unknown/expired idp=%d and ip: %s, ignoring", idp, self.ip)
             return
 
         logger.debug("← [idp=%d] %s", idp, packet)
@@ -277,7 +277,7 @@ class TecnoClient:
 
         if complete:
             with self._sessions_lock:
-                pending = self._pending.get(idp)
+                pending = self._pending.get(session.idp)
             if pending is not None:
                 future, loop = pending
                 if not future.done():

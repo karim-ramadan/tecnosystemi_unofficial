@@ -4,6 +4,7 @@ Tecnosystemi CLI  —  ``tecno`` command entry point.
 Non-interactive usage::
 
     tecno discover
+    tecno register 192.168.4.1 1234
     tecno --ip 192.168.4.1 --pin 1234 info
     tecno --ip 192.168.4.1 --pin 1234 state
     tecno --ip 192.168.4.1 --pin 1234 on
@@ -35,6 +36,7 @@ from ._repl import (
     parse_kv,
     print_info,
     print_state,
+    register_device,
 )
 from ._session import IDP_FILE, SessionState
 
@@ -117,6 +119,13 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     sub.add_parser("discover", help="Scan the local network for devices")
 
+    p_register = sub.add_parser(
+        "register",
+        help="Manually register a device by IP (useful when discovery is unavailable)",
+    )
+    p_register.add_argument("reg_ip", metavar="IP", help="Device IP address")
+    p_register.add_argument("reg_pin", metavar="PIN", nargs="?", default=None, help="Device PIN (optional, validated if given)")
+
     sub.add_parser("info", help="Show device information")
 
     sub.add_parser("state", help="Show full device state (requires PIN)")
@@ -171,6 +180,14 @@ def main(argv: Optional[list[str]] = None) -> None:
         if handler:
             disable_debug(handler)
         return
+
+    if args.cmd == "register":
+        handler = enable_debug() if args.debug else None
+        session = SessionState.load()
+        ok = register_device(args.reg_ip, args.reg_pin, session)
+        if handler:
+            disable_debug(handler)
+        sys.exit(0 if ok else 1)
 
     ip = _need_ip(session, args)
     pin = _need_pin(session, ip, args)

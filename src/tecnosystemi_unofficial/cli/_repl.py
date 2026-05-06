@@ -113,6 +113,38 @@ def discover(timeout: float = 2.0) -> list[str]:
     return found
 
 
+def register_device(ip: str, pin: Optional[str], session: SessionState) -> bool:
+    """
+    Connect to *ip*, optionally validate *pin*, and persist both to *session*.
+
+    Returns True on success.  Prints status to stdout.
+    """
+    idp_mgr = IDPManager(backend="file", path=IDP_FILE)
+    client = TecnoClient(ip=ip, idp_manager=idp_mgr, timeout=12.0)
+    try:
+        client.start()
+    except Exception as exc:
+        print(f"  {C.red('✗')} Could not reach {ip}: {exc}")
+        return False
+
+    pico = PicoDevice(client, pin=pin or "-1")
+    try:
+        if pin:
+            print("  Checking PIN …")
+            ok = asyncio.run(pico.check_pin(timeout=8.0))
+            if not ok:
+                print(f"  {C.red('✗')} PIN rejected by device.")
+                return False
+            session.set_pin(ip, pin)
+            print(f"  {C.green('✓')} PIN accepted and saved for {ip}")
+        session.ip = ip
+        session.save()
+        print(f"  {C.green('✓')} Registered {C.bold(ip)}" + ("" if pin else f"  {C.dim('(no PIN — run: tecno --ip ' + ip + ' pin <value>)')}"))
+        return True
+    finally:
+        client.stop()
+
+
 def enable_debug() -> Optional[logging.Handler]:
     """
     Enable DEBUG-level logging on the library's root logger.
@@ -473,6 +505,36 @@ class TecnoREPL(cmd.Cmd):
                     self._connect(found[idx])
                 else:
                     print(f"  {C.yellow('!')} Index out of range.")
+
+    def do_register(self, arg: str) -> None:
+        """register <IP> [PIN]  —  manually add a device by IP (and optional PIN).
+
+        Useful when discovery is unavailable (e.g. inside Docker).
+
+        Examples:
+          register 192.168.1.50
+          register 192.168.1.50 1234
+        """
+        parts = arg.strip().split()
+        if not parts:
+            print("  Usage: register <IP> [PIN]")
+            return
+        ip = parts[0]
+        pin = parts[1] if len(parts) > 1 else None
+
+        if not self._connect(ip):
+            return
+
+        if pin:
+            old_pin = self._pico.pin  # type: ignore[union-attr]
+            self._pico.pin = pin  # type: ignore[union-attr]
+            print("  Checking PIN …")
+            if asyncio.run(self._pico.check_pin(timeout=8.0)):  # type: ignore[union-attr]
+                self._session.set_pin(ip, pin)
+                print(f"  {C.green('✓')} PIN accepted and saved for {ip}")
+            else:
+                self._pico.pin = old_pin  # type: ignore[union-attr]
+                print(f"  {C.red('✗')} PIN rejected by device.  Run 'pin <value>' to try again.")
 
     def do_select(self, arg: str) -> None:
         """select <n|IP>  —  connect to a device by list number or IP."""
