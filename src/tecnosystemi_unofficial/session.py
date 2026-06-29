@@ -28,9 +28,10 @@ class RequestSession:
     the associated asyncio Future.
     """
 
-    def __init__(self, idp: int, command: str):
+    def __init__(self, idp: int, command: str, expects_data: bool = True):
         self.idp = idp
         self.command = command
+        self.expects_data = expects_data
         self.state: RequestState = RequestState.WAITING_ACK
         self.response: Optional[dict] = None
         self.all_packets: list[dict] = []
@@ -49,15 +50,16 @@ class RequestSession:
 
         res = packet.get("res")
         if res == 99:
+            if not self.expects_data:
+                self.response = packet
+                self.state = RequestState.COMPLETED
+                return True
             self.state = RequestState.WAITING_FINAL
-        elif res == 1:
-            # Data response (res:1) or error (res:0)
+            return False
+        else:
             self.response = packet
             self.state = RequestState.COMPLETED
             return True
-        else:
-            self.state = RequestState.COMPLETED
-        return False
 
     @property
     def is_complete(self) -> bool:

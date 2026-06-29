@@ -99,15 +99,24 @@ class UDPTransport:
                 self._send_sock.sendto(data, (self.ip, self.send_port))
                 return
             except OSError as exc:
-                # EHOSTUNREACH / ENETUNREACH can be transient on macOS when the
-                # ARP cache for the target IP is stale right after a discovery scan.
-                if exc.errno in (errno.EHOSTUNREACH, errno.ENETUNREACH) and attempt < 2:
+                # EHOSTUNREACH / ENETUNREACH: transient on macOS when the ARP cache for
+                # the target IP is stale right after a discovery scan; 0.5 s lets the
+                # kernel refresh its neighbour table before the next attempt.
+                # EPERM: Linux propagates a stored ICMP error (e.g. ICMP type 3/code 13
+                # from Docker's iptables REJECT rule) from the socket's error queue on
+                # the next sendto(); recreating the socket flushes the queue immediately,
+                # so no sleep is needed.
+                if exc.errno in (errno.EHOSTUNREACH, errno.ENETUNREACH, errno.EPERM) and attempt < 2:
+                    if exc.errno == errno.EPERM:
+                        self._send_sock.close()
+                        self._send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    else:
+                        time.sleep(0.5)
                     logger.warning(
-                        "send attempt %d failed (%s), retrying in 0.5s …",
+                        "send attempt %d failed (%s), retrying …",
                         attempt + 1,
                         exc,
                     )
-                    time.sleep(0.5)
                     continue
                 raise
 

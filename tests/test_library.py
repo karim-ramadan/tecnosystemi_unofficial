@@ -19,8 +19,22 @@ import pytest
 from tecnosystemi_unofficial import IDPManager, TecnoClient
 from tecnosystemi_unofficial.devices import PicoDevice
 from tecnosystemi_unofficial.idp import FileIDPStore, MemoryIDPStore
-from tecnosystemi_unofficial.session import CONTROL_COMMANDS, RequestSession, RequestState
+from tecnosystemi_unofficial.session import RequestSession, RequestState
 from tecnosystemi_unofficial.templates_loader import TemplateLoader
+
+# Mirror of the control-command set used by the client; kept here for test helpers.
+CONTROL_COMMANDS: frozenset[str] = frozenset(
+    {
+        "upd_pico",
+        "upd_P6X",
+        "check_led",
+        "upd_cu",
+        "upd_fasce",
+        "upd_zona",
+        "upd_date",
+        "config",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -29,34 +43,34 @@ from tecnosystemi_unofficial.templates_loader import TemplateLoader
 
 
 class TestIDPManager:
-    async def test_starts_at_one(self):
+    async def test_starts_at_min_idp(self):
         mgr = IDPManager()
         idp = await mgr.acquire()
-        assert idp == 1
+        assert idp == IDPManager.MIN_IDP
 
     async def test_increments(self):
         mgr = IDPManager()
-        await mgr.acquire()  # 1, not released
-        mgr.release(1)
+        first = await mgr.acquire()
+        mgr.release(first)
         idp2 = await mgr.acquire()
-        assert idp2 == 2
+        assert idp2 == IDPManager.MIN_IDP + 1
 
     async def test_wraps_at_max(self):
         mgr = IDPManager()
-        await mgr._store.save(IDPManager.MAX_IDP)  # next candidate = 500
+        await mgr._store.save(IDPManager.MAX_IDP)  # next candidate = MAX_IDP
         idp = await mgr.acquire()
         assert idp == IDPManager.MAX_IDP
         mgr.release(idp)
         idp2 = await mgr.acquire()
-        assert idp2 == 1  # wrapped
+        assert idp2 == IDPManager.MIN_IDP  # wrapped back to MIN_IDP
 
     async def test_skips_in_flight_on_wrap(self):
         mgr = IDPManager()
-        # Manually mark 500 as in-flight
+        # Manually mark MAX_IDP as in-flight so acquire must wrap
         mgr._in_flight.add(IDPManager.MAX_IDP)
         await mgr._store.save(IDPManager.MAX_IDP)
         idp = await mgr.acquire()
-        assert idp == 1  # skipped 500, landed on 1
+        assert idp == IDPManager.MIN_IDP  # skipped MAX_IDP, wrapped to MIN_IDP
 
     async def test_concurrent_acquire_unique(self):
         mgr = IDPManager()
@@ -74,7 +88,7 @@ class TestFileIDPStore:
     async def test_persists_and_reads(self, tmp_path):
         path = tmp_path / "idp.json"
         store = FileIDPStore(path)
-        assert await store.get() == 1  # default
+        assert await store.get() == IDPManager.MIN_IDP  # default start
         await store.save(42)
         store2 = FileIDPStore(path)
         assert await store2.get() == 42
@@ -83,18 +97,18 @@ class TestFileIDPStore:
         path = tmp_path / "idp.json"
         path.write_text("not json")
         store = FileIDPStore(path)
-        assert await store.get() == 1
+        assert await store.get() == IDPManager.MIN_IDP
 
     async def test_file_idp_manager(self, tmp_path):
         path = tmp_path / "idp.json"
         mgr = IDPManager(backend="file", path=path)
         idp = await mgr.acquire()
-        assert idp == 1
+        assert idp == IDPManager.MIN_IDP
         mgr.release(idp)
         # Next session reads from file
         mgr2 = IDPManager(backend="file", path=path)
         idp2 = await mgr2.acquire()
-        assert idp2 == 2
+        assert idp2 == IDPManager.MIN_IDP + 1
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +119,7 @@ class TestFileIDPStore:
 class TestRequestSession:
     def test_control_command_completes_on_ack(self):
         cmd = next(iter(CONTROL_COMMANDS))  # any control command
-        session = RequestSession(idp=1, command=cmd)
+        session = RequestSession(idp=1, command=cmd, expects_data=False)
         assert not session.expects_data
 
         complete = session.handle_packet({"idp": 1, "res": 99})
@@ -637,3 +651,42 @@ class TestUDPTransportShared:
             time.sleep(0.05)
         assert received == [{"alive": 1}]
         t2.stop()
+
+
+# ---------------------------------------------------------------------------
+# UDPTransport.send() EPERM retry tests
+# ---------------------------------------------------------------------------
+
+
+def test_send_retries_on_eperm(monkeypatch):
+    import errno as _errno
+    import socket as _socket
+
+    calls = []
+
+    class FakeSock:
+        def sendto(self, data, addr):
+            calls.append("sendto")
+            if len(calls) == 1:
+                raise OSError(_errno.EPERM, "Operation not permitted")
+
+        def close(self):
+            calls.append("close")
+
+    def fake_socket_constructor(*a, **kw):
+        calls.append("new_socket")
+        return FakeSock()
+
+    monkeypatch.setattr(_socket, "socket", fake_socket_constructor)
+
+    t = UDPTransport.__new__(UDPTransport)
+    t.ip = "192.168.4.1"
+    t.send_port = 40070
+    t._send_sock = FakeSock()  # pre-seeded; first sendto raises EPERM
+    calls.clear()  # reset after setup
+
+    t.send(b"test")  # must not raise
+
+    assert "close" in calls
+    assert calls.count("sendto") == 2
+    assert calls.count("new_socket") == 1
