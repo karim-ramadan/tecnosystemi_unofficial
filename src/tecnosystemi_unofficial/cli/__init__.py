@@ -14,21 +14,29 @@ Non-interactive usage::
     tecno --ip 192.168.4.1 --pin 1234 mode 4
     tecno --debug --ip 192.168.4.1 --pin 1234 state
 
+    # Polaris 5X
+    tecno --type polaris5x --ip 192.168.1.100 --pin 1234 state
+    tecno --type polaris5x --ip 192.168.1.100 --pin 1234 on
+    tecno --type polaris5x --ip 192.168.1.100 --pin 1234 mode 1
+
 Interactive REPL (no sub-command)::
 
     tecno
     tecno --debug
+    tecno --type polaris5x
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import sys
-from typing import Optional
+from typing import Optional, Union
 
 from ..idp import IDPManager
 from ._colors import C
 from ._repl import (
+    DEVICE_TYPES,
     TecnoREPL,
     discover,
     enable_debug,
@@ -36,26 +44,33 @@ from ._repl import (
     parse_kv,
     print_info,
     print_state,
+    print_state_polaris5x,
     register_device,
 )
 from ._session import IDP_FILE, SessionState
 
 
-def _build_client(ip: str, pin: str, debug: bool):
-    """Return a started (client, pico) pair, or exit on failure."""
+def _build_client(ip: str, pin: str, device_type: str, debug: bool):
+    """Return a started (client, device) pair, or exit on failure."""
     from ..client import TecnoClient
-    from ..devices import PicoDevice
+    from ..devices import PicoDevice, Polaris5XDevice
+    from ..polaris_client import PolarisClient
 
     handler = None
     if debug:
         handler = enable_debug()
 
     try:
-        idp_mgr = IDPManager(backend="memory")
-        client = TecnoClient(ip=ip, idp_manager=idp_mgr, timeout=12.0)
-        client.start()
-        pico = PicoDevice(client, pin=pin)
-        return client, pico, handler
+        if device_type == "polaris5x":
+            client = PolarisClient(ip=ip, pin=pin)
+            client.start()
+            device = Polaris5XDevice(client)
+        else:
+            idp_mgr = IDPManager(backend="memory")
+            client = TecnoClient(ip=ip, idp_manager=idp_mgr, timeout=12.0)
+            client.start()
+            device = PicoDevice(client, pin=pin)
+        return client, device, handler
     except Exception as exc:
         if handler:
             disable_debug(handler)
@@ -64,7 +79,6 @@ def _build_client(ip: str, pin: str, debug: bool):
 
 
 def _need_ip(session: SessionState, args: argparse.Namespace) -> str:
-    """Return the resolved IP or exit with a helpful message."""
     ip = args.ip or session.ip
     if not ip:
         print(f"  {C.red('✗')} No device IP given.  Use --ip <address> or run 'tecno discover' first.", file=sys.stderr)
@@ -73,12 +87,6 @@ def _need_ip(session: SessionState, args: argparse.Namespace) -> str:
 
 
 def _need_pin(session: SessionState, ip: str, args: argparse.Namespace) -> str:
-    """
-    Return the PIN to use for *ip*.
-
-    Priority: --pin flag > stored per-device PIN > prompt if tty available > "-1"
-    If --pin is given it is also saved for future use.
-    """
     if args.pin:
         session.set_pin(ip, args.pin)
         return args.pin
@@ -87,7 +95,6 @@ def _need_pin(session: SessionState, ip: str, args: argparse.Namespace) -> str:
     if stored != "-1":
         return stored
 
-    # No PIN stored — prompt if we have a tty.
     if sys.stdin.isatty():
         try:
             candidate = input(f"PIN for {ip}: ").strip()
@@ -95,8 +102,6 @@ def _need_pin(session: SessionState, ip: str, args: argparse.Namespace) -> str:
             print()
             return "-1"
         if candidate:
-            # We can't validate here without opening a client first — just save it
-            # and let the command fail with a clear error if wrong.
             session.set_pin(ip, candidate)
             return candidate
     return "-1"
@@ -109,6 +114,14 @@ def main(argv: Optional[list[str]] = None) -> None:
     )
     parser.add_argument("--ip", default="", metavar="ADDRESS", help="Device IP address")
     parser.add_argument("--pin", default="", metavar="PIN", help="Device PIN")
+    parser.add_argument(
+        "--type",
+        default="",
+        dest="device_type",
+        metavar="TYPE",
+        choices=list(DEVICE_TYPES) + [""],
+        help=f"Device type: {', '.join(DEVICE_TYPES)} (default: pico)",
+    )
     parser.add_argument(
         "--debug",
         action="store_true",
@@ -126,7 +139,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     p_register.add_argument("reg_ip", metavar="IP", help="Device IP address")
     p_register.add_argument("reg_pin", metavar="PIN", nargs="?", default=None, help="Device PIN (optional, validated if given)")
 
-    sub.add_parser("info", help="Show device information")
+    sub.add_parser("info", help="Show device information (Pico only)")
 
     sub.add_parser("state", help="Show full device state (requires PIN)")
 
@@ -137,27 +150,30 @@ def main(argv: Optional[list[str]] = None) -> None:
     p_set = sub.add_parser("set", help="Update device fields: set key=value ...")
     p_set.add_argument("fields", nargs="+", metavar="key=value")
 
-    p_speed = sub.add_parser("speed", help="Set fan speed (1-3)")
+    p_speed = sub.add_parser("speed", help="Set fan speed 1-3 (Pico only)")
     p_speed.add_argument("value", type=int)
     p_speed.add_argument("raw", nargs="?", type=int, default=None, metavar="RAW")
 
-    p_mode = sub.add_parser("mode", help="Set operating mode (0-12)")
+    p_mode = sub.add_parser("mode", help="Set operating mode (Pico: 1-12 / Polaris 5X: 0-3)")
     p_mode.add_argument("value", type=int)
 
-    p_humidity = sub.add_parser("humidity", help="Set target humidity (0-100)")
+    p_humidity = sub.add_parser("humidity", help="Set target humidity 0-100 (Pico only)")
     p_humidity.add_argument("value", type=int)
 
-    p_night = sub.add_parser("night", help="Set night mode: on|off")
+    p_night = sub.add_parser("night", help="Set night mode on|off (Pico only)")
     p_night.add_argument("state", choices=["on", "off"])
 
     args = parser.parse_args(argv)
     session = SessionState.load()
 
+    # Resolve device type: CLI flag > session > default
+    device_type = args.device_type or session.device_type or "pico"
+
     if args.cmd is None:
-        # Interactive REPL
         repl = TecnoREPL(
             initial_ip=args.ip,
             initial_pin=args.pin,
+            initial_device_type=args.device_type,
             debug=args.debug,
         )
         repl.cmdloop()
@@ -191,26 +207,35 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     ip = _need_ip(session, args)
     pin = _need_pin(session, ip, args)
-    client, pico, debug_handler = _build_client(ip, pin, args.debug)
+    client, device, debug_handler = _build_client(ip, pin, device_type, args.debug)
+
+    is_polaris5x = device_type == "polaris5x"
 
     try:
         if args.cmd == "info":
+            if is_polaris5x:
+                print(f"  {C.yellow('!')} 'info' is not supported for Polaris 5X.", file=sys.stderr)
+                sys.exit(1)
             print("Fetching info …")
-            print_info(pico.get_info(timeout=12.0))
+            print_info(asyncio.run(device.get_info(timeout=12.0)))  # type: ignore[union-attr]
 
         elif args.cmd == "state":
             print("Fetching state …")
-            print_state(pico.get_state(timeout=15.0))
+            state = asyncio.run(device.get_state(timeout=15.0))
+            if is_polaris5x:
+                print_state_polaris5x(state)
+            else:
+                print_state(state)
 
         elif args.cmd == "on":
-            if pico.turn_on():
+            if asyncio.run(device.turn_on()):
                 print(f"{C.green('✓')} Device {C.green('ON')}")
             else:
                 print(f"{C.red('✗')} Timed out.")
                 sys.exit(2)
 
         elif args.cmd == "off":
-            if pico.turn_off():
+            if asyncio.run(device.turn_off()):
                 print(f"{C.green('✓')} Device {C.red('OFF')}")
             else:
                 print(f"{C.red('✗')} Timed out.")
@@ -221,36 +246,45 @@ def main(argv: Optional[list[str]] = None) -> None:
             if not fields:
                 print(f"{C.red('✗')} No valid key=value pairs found.", file=sys.stderr)
                 sys.exit(1)
-            if pico.update(**fields):
+            if asyncio.run(device.update(**fields)):
                 print(f"{C.green('✓')} " + " ".join(f"{k}={v}" for k, v in fields.items()))
             else:
                 print(f"{C.red('✗')} Timed out.")
                 sys.exit(2)
 
         elif args.cmd == "speed":
-            if pico.set_speed(args.value, speed_raw=args.raw):
+            if is_polaris5x:
+                print(f"  {C.yellow('!')} 'speed' is not supported for Polaris 5X.", file=sys.stderr)
+                sys.exit(1)
+            if asyncio.run(device.set_speed(args.value, speed_raw=args.raw)):  # type: ignore[union-attr]
                 print(f"{C.green('✓')} Speed → {args.value}")
             else:
                 print(f"{C.red('✗')} Timed out.")
                 sys.exit(2)
 
         elif args.cmd == "mode":
-            if pico.set_mode(args.value):
+            if asyncio.run(device.set_mode(args.value)):
                 print(f"{C.green('✓')} Mode → {args.value}")
             else:
                 print(f"{C.red('✗')} Timed out.")
                 sys.exit(2)
 
         elif args.cmd == "humidity":
-            if pico.set_humidity(args.value):
+            if is_polaris5x:
+                print(f"  {C.yellow('!')} 'humidity' is not supported for Polaris 5X.", file=sys.stderr)
+                sys.exit(1)
+            if asyncio.run(device.set_humidity(args.value)):  # type: ignore[union-attr]
                 print(f"{C.green('✓')} Humidity → {args.value}%")
             else:
                 print(f"{C.red('✗')} Timed out.")
                 sys.exit(2)
 
         elif args.cmd == "night":
+            if is_polaris5x:
+                print(f"  {C.yellow('!')} 'night' is not supported for Polaris 5X.", file=sys.stderr)
+                sys.exit(1)
             enabled = args.state == "on"
-            if pico.set_night_mode(enabled):
+            if asyncio.run(device.set_night_mode(enabled)):  # type: ignore[union-attr]
                 print(f"{C.green('✓')} Night mode → {args.state}")
             else:
                 print(f"{C.red('✗')} Timed out.")
