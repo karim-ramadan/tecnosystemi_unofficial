@@ -51,7 +51,7 @@ class FileIDPStore(IDPStore):
         try:
             return json.loads(self._path.read_text()).get("idp", self._start)
         except (FileNotFoundError, json.JSONDecodeError, KeyError, ValueError):
-            return 1
+            return self._start
 
     def _write(self, value: int) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -99,17 +99,19 @@ class IDPManager:
         """
         async with self._lock:
             candidate = await self._store.get()
-            for _ in range(self.MAX_IDP):
+            _range = self.MAX_IDP - self.MIN_IDP + 1
+            for _ in range(_range):
                 if candidate not in self._in_flight:
                     break
-                candidate = (candidate % (self.MAX_IDP - self.MIN_IDP)) + self.MIN_IDP + 1
+                candidate = self.MIN_IDP + (candidate - self.MIN_IDP + 1) % _range
             else:
                 raise RuntimeError(
                     "All IDP slots are in-flight. Cannot send a new command."
                 )
             self._in_flight.add(candidate)
             try:
-                await self._store.save((candidate % self.MAX_IDP) + 1)
+                next_candidate = self.MIN_IDP + (candidate - self.MIN_IDP + 1) % _range
+                await self._store.save(next_candidate)
             except Exception:
                 self._in_flight.discard(candidate)
                 raise

@@ -30,6 +30,20 @@ from .session import RequestSession
 from .templates_loader import TemplateLoader
 from .transport import UDPTransport
 
+# Commands that complete on res:99 alone (no data packet follows).
+_CONTROL_COMMANDS: frozenset[str] = frozenset(
+    {
+        "upd_pico",
+        "upd_P6X",
+        "check_led",
+        "upd_cu",
+        "upd_fasce",
+        "upd_zona",
+        "upd_date",
+        "config",
+    }
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -140,7 +154,7 @@ class TecnoClient:
         payload["frm"] = "app"
 
         cmd = payload.get("cmd", "")
-        session = RequestSession(idp, cmd)
+        session = RequestSession(idp, cmd, expects_data=cmd not in _CONTROL_COMMANDS)
 
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
