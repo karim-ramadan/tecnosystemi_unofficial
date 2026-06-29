@@ -250,56 +250,175 @@ def print_state(state: Optional[dict]) -> None:
     print()
 
 
+def _as_int(v) -> Optional[int]:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _zone_nr(z: dict) -> Optional[int]:
+    """Return the numeric zone number from a zone dict (id_zona full / nr ridotto)."""
+    return _as_int(z.get("id_zona", z.get("nr")))
+
+
+def _zone_name(z: dict) -> str:
+    """Return the zone name string from a zone dict (name full / n ridotto)."""
+    return str(z.get("name", z.get("n", ""))).strip()
+
+
+def _find_zone(zones: list, raw: str) -> Optional[dict]:
+    """Find a zone by its numeric number (id_zona / nr, 1–4)."""
+    try:
+        numeric = int(raw)
+    except ValueError:
+        return None
+    return next((z for z in zones if _zone_nr(z) == numeric), None)
+
+
+def _zones_available(zones: list) -> str:
+    """Human-readable list of zones: '1 (CUCINA), 2 (CAMERETTA), …'"""
+    parts = []
+    for z in zones:
+        nr = _zone_nr(z)
+        name = _zone_name(z)
+        parts.append(f"{nr} ({name})" if name else str(nr))
+    return ", ".join(parts)
+
+
+def _parse_setpoint(raw) -> Optional[float]:
+    """Convert raw setpoint (string or int ×10) to °C."""
+    if raw is None:
+        return None
+    try:
+        v = float(raw)
+        return v / 10.0 if abs(v) >= 100 else v
+    except (ValueError, TypeError):
+        return None
+
+
+def _print_zone_row(z: dict) -> None:
+    nr = _zone_nr(z) or "?"
+    name = _zone_name(z)
+    z_off = z.get("is_off", z.get("off", 0))
+    status = C.red("OFF") if z_off == 1 else C.green("ON ")
+
+    t_c = Polaris5XDevice.parse_zone_temperature(z.get("t"))
+    ts_c = _parse_setpoint(z.get("t_set", z.get("ts")))
+
+    temp_str = f"{t_c:.1f}°C" if t_c is not None else "–"
+    setp_str = f"{ts_c:.1f}°C" if ts_c is not None else "–"
+
+    fan = z.get("fan")
+    extras = []
+    if fan is not None and fan != -1:
+        fan_set = z.get("fan_set")
+        extras.append("fan=" + str(fan) + (f"→{fan_set}" if fan_set is not None and fan_set != -1 else ""))
+    if z.get("is_crono"):
+        extras.append(C.dim("crono"))
+    if z.get("err"):
+        extras.append(C.red(f"err={z['err']}"))
+    extras_str = "  " + "  ".join(extras) if extras else ""
+
+    print(
+        f"  [{C.bold(str(nr))}] {name:<20} [{status}]"
+        f"  T={temp_str:<8} SP={setp_str}{extras_str}"
+    )
+
+
+def _print_zone_detail(z: dict) -> None:
+    z_off = z.get("is_off", z.get("off", 0))
+    print(f"  {'Power':<20} " + (C.red("OFF") if z_off == 1 else C.green("ON")))
+
+    t_c = Polaris5XDevice.parse_zone_temperature(z.get("t"))
+    if t_c is not None:
+        print(f"  {'Temperature':<20} {t_c:.1f} °C")
+
+    ts_c = _parse_setpoint(z.get("t_set", z.get("ts")))
+    if ts_c is not None:
+        print(f"  {'Setpoint':<20} {ts_c:.1f} °C")
+
+    fan = z.get("fan")
+    if fan is not None:
+        if fan == -1:
+            print(f"  {'Fan coil':<20} not installed")
+        else:
+            fan_set = z.get("fan_set", "–")
+            print(f"  {'Fan coil':<20} {fan}  (setpoint: {fan_set})")
+
+    shu = z.get("shu")
+    if shu is not None and shu != -1:
+        print(f"  {'Shutter':<20} {shu}  (setpoint: {z.get('shu_set', '–')})")
+
+    is_crono = z.get("is_crono", 0)
+    print(f"  {'Schedule':<20} " + (C.green("on") if is_crono else C.dim("off")))
+
+    err = z.get("err")
+    if err:
+        print(f"  {'Error':<20} {C.red(str(err))}")
+
+
 def print_state_polaris5x(state: Optional[dict]) -> None:
     if state is None:
         print(f"  {C.red('✗')} No response (timeout).")
         return
-    header = C.bold("─────  Polaris 5X State  ─────")
-    print(f"\n  {header}\n")
 
-    is_off = state.get("is_off")
+    print(f"\n  {C.bold('─────  Polaris 5X  ─────')}\n")
+
+    is_off = state.get("is_off", state.get("off"))
+    is_cool = state.get("is_cool", state.get("cl"))
+    cool_mod = state.get("cool_mod", state.get("cl_m"))
+
     if is_off is not None:
-        label = C.red("OFF") if is_off == 1 else C.green("ON")
-        print(f"  {C.cyan('is_off          ')} = {label}  {C.dim(f'(raw {is_off})')}")
+        power = C.red("OFF") if is_off == 1 else C.green("ON")
+        print(f"  {'Power':<20} {power}")
 
-    is_cool = state.get("is_cool")
-    cool_mod = state.get("cool_mod")
     if is_cool is not None:
-        if is_cool == 1:
-            sub = _P6X_COOL_MOD.get(cool_mod or 1, f"cool_mod={cool_mod}")
-            print(f"  {C.cyan('mode            ')} = {C.cyan('Raffrescamento')}  {C.dim(f'({sub})')}")
+        if is_cool == 0:
+            mode_str = "Riscaldamento (Heating)"
         else:
-            print(f"  {C.cyan('mode            ')} = Riscaldamento")
+            sub = _P6X_COOL_MOD.get(cool_mod or 1, f"sub-mode {cool_mod}")
+            mode_str = f"Raffrescamento — {sub}"
+        print(f"  {'Mode':<20} {mode_str}")
 
-    for k in ("fw_ver", "modello", "name", "ip", "master_nr", "maxcom", "w_rssi", "up_time",
-              "vfw", "vr", "m_crono", "config_mod", "f_est", "f_inv"):
-        if k in state:
-            print(f"  {C.cyan(f'{k:16s}')} = {state[k]}")
+    for label, keys in [
+        ("Name",       ("name",)),
+        ("Firmware",   ("fw_ver", "vfw")),
+        ("Model",      ("modello",)),
+        ("Uptime",     ("up_time",)),
+        ("Wi-Fi RSSI", ("w_rssi",)),
+    ]:
+        for k in keys:
+            if k in state:
+                print(f"  {label:<20} {state[k]}")
+                break
 
-    zones = state.get("z")
+    t_can = state.get("t_can", state.get("tc"))
+    f_inv = state.get("f_inv", state.get("fi"))
+    f_est = state.get("f_est", state.get("fe"))
+    if any(v is not None for v in (t_can, f_inv, f_est)):
+        print(f"\n  {C.bold('CU Settings')}")
+        if t_can is not None:
+            tc = Polaris5XDevice.parse_zone_temperature(t_can)
+            print(f"  {'Canal setpoint':<20} " + (f"{tc:.1f} °C" if tc is not None else str(t_can)))
+        if f_inv is not None:
+            print(f"  {'Fan (winter)':<20} {f_inv}")
+        if f_est is not None:
+            print(f"  {'Fan (summer)':<20} {f_est}")
+
+    zones = state.get("zone") or state.get("z") or []
     if zones:
         print(f"\n  {C.bold('Zones:')}\n")
         for z in zones:
-            n = z.get("n", "?")
-            name = z.get("name", "")
-            z_off = z.get("is_off", 0)
-            c_b = z.get("c_b", 0)
-            c_w = z.get("c_w", 0)
-            status = C.red("off") if z_off == 1 else C.green("on")
-            temp_b = f"{c_b / 10.0:.1f}°C" if c_b else "–"
-            temp_w = f"{c_w / 10.0:.1f}°C" if c_w else "–"
-            crono = z.get("m_crono", 0)
-            print(
-                f"  Zone {C.bold(str(n)):>6s}  {name:<16s}  [{status}]"
-                f"  T={temp_b}  SP={temp_w}"
-                + (f"  {C.dim('crono')}" if crono else "")
-            )
+            _print_zone_row(z)
         print()
 
     _p6x_known = {
-        "is_off", "is_cool", "cool_mod", "z", "zp", "idp", "frm", "res", "cmd", "pin",
-        "fw_ver", "modello", "name", "ip", "master_nr", "maxcom", "w_rssi", "up_time",
-        "vfw", "vr", "m_crono", "config_mod", "f_est", "f_inv",
+        "is_off", "off", "is_cool", "cl", "cool_mod", "cl_m",
+        "zone", "z", "zp", "idp", "frm", "res", "cmd", "pin",
+        "name", "fw_ver", "vfw", "modello", "ip", "up_time", "w_rssi",
+        "master_nr", "maxcom", "vr", "m_crono", "config_mod",
+        "t_can", "tc", "f_inv", "fi", "f_est", "fe", "err_cu",
     }
     extra = {k: v for k, v in state.items() if k not in _p6x_known}
     if extra:
@@ -665,6 +784,61 @@ class TecnoREPL(cmd.Cmd):
             self._connect(ip, silent=True)
             print(f"  {C.green('✓')} Reconnected to {ip} as {C.bold(arg)}")
 
+    def do_help(self, arg: str) -> None:
+        """Show help, or help for a specific command: help <command>."""
+        if arg:
+            try:
+                doc = getattr(self, f"do_{arg}").__doc__ or ""
+                print(f"\n  {doc.strip()}\n")
+            except AttributeError:
+                print(f"  {C.yellow('!')} Unknown command: {arg!r}")
+            return
+
+        def row(cmd_str: str, desc: str) -> None:
+            print(f"    {C.cyan(f'{cmd_str:<32s}')}  {desc}")
+
+        dtype = self._device_type
+        print(f"\n  {C.bold('─────  Tecnosystemi CLI  ─────')}\n")
+
+        print(f"  {C.bold('Connection:')}")
+        row("discover [timeout]", "Scan local network for devices")
+        row("select <n|IP>", "Connect to a device")
+        row("register <IP> [PIN]", "Manually add a device by IP")
+        row("type [pico|polaris5x]", "Show / switch device type")
+        print()
+
+        print(f"  {C.bold('Control  (all device types):')}")
+        row("state", "Show current device state")
+        row("on / off", "Power control")
+        row("mode [value]", "Set operating mode (interactive menu if no value)")
+        row("set key=value …", "Update device fields (low-level)")
+        row("pin [value|forget|list]", "Manage stored PIN")
+        row("check_pin", "Validate stored PIN against device")
+        print()
+
+        if dtype != "polaris5x":
+            print(f"  {C.bold('Pico-only:')}")
+            row("info", "Device info (serial, firmware, name)")
+            row("speed <1-3>", "Fan speed: 1=Min  2=Medium  3=Max")
+            row("humidity <0-100>", "Target humidity (%)")
+            row("night [on|off]", "Night mode")
+            print()
+
+        if dtype != "pico":
+            print(f"  {C.bold('Polaris 5X-only:')}")
+            row("zone", "List all zones with state")
+            row("zone <id>", "Show detailed zone state")
+            row("zone <id> on|off", "Turn zone on / off")
+            row("zone <id> temp <°C>", "Set temperature setpoint  (e.g. zone 1 temp 21.5)")
+            row("zone <id> crono on|off", "Enable / disable schedule mode")
+            row("zone <id> fan <n>", "Set fan coil speed")
+            print()
+
+        print(f"  {C.bold('Session:')}")
+        row("debug [on|off]", "Toggle raw packet logging")
+        row("quit / exit", "Exit the REPL")
+        print(f"\n  {C.dim('Tip: help <command>  for full usage and examples')}\n")
+
     def do_info(self, _arg: str) -> None:
         """Fetch and display device information (Pico only — no PIN required)."""
         if not self._require_pico():
@@ -850,6 +1024,140 @@ class TecnoREPL(cmd.Cmd):
             print(f"  {C.green('✓')} Night mode → {'on' if enabled else 'off'}")
         else:
             print(f"  {C.red('✗')} Command timed out.")
+
+    def do_zone(self, arg: str) -> None:
+        """zone [<id> [on|off|temp <°C>|crono on|off|fan <n>]]  —  per-zone control (Polaris 5X only).
+
+        zone                     List all zones with state
+        zone <id>                Show detailed state for zone <id>
+        zone <id> on             Turn zone on
+        zone <id> off            Turn zone off
+        zone <id> temp <°C>      Set temperature setpoint  (e.g. zone 1 temp 21.5)
+        zone <id> crono on|off   Enable / disable schedule mode
+        zone <id> fan <n>        Set fan coil speed
+        """
+        if not self._require_device():
+            return
+        if not self._is_polaris5x():
+            print(f"  {C.yellow('!')} 'zone' is only available for Polaris 5X.")
+            return
+        if not self._ensure_pin():
+            return
+
+        parts = arg.strip().split()
+
+        print("  Fetching state …")
+        state = asyncio.run(self._device.get_state(timeout=10.0))  # type: ignore[union-attr]
+        if state is None:
+            print(f"  {C.red('✗')} No response from device.")
+            return
+
+        zones = state.get("zone") or state.get("z") or []
+
+        if not parts:
+            if not zones:
+                print("  No zones found in device state.")
+                return
+            print(f"\n  {C.bold('Zones:')}\n")
+            for z in zones:
+                _print_zone_row(z)
+            print()
+            return
+
+        try:
+            int(parts[0])
+        except ValueError:
+            print(f"  {C.yellow('!')} Zone must be addressed by number.  Available: {_zones_available(zones)}")
+            return
+
+        zone = _find_zone(zones, parts[0])
+        if zone is None:
+            print(f"  {C.red('✗')} Zone {parts[0]} not found.  Available: {_zones_available(zones)}")
+            return
+
+        zone_nr = _zone_nr(zone)
+        zone_name = _zone_name(zone)
+        cur_setpoint = _parse_setpoint(zone.get("t_set", zone.get("ts"))) or 20.0
+        cur_is_off = zone.get("is_off", zone.get("off", 0))
+        cur_crono = zone.get("is_crono", 0)
+
+        if len(parts) == 1:
+            print(f"\n  {C.bold(f'Zone {zone_nr} — {zone_name}')}\n")
+            _print_zone_detail(zone)
+            print()
+            return
+
+        action = parts[1].lower()
+
+        if action in ("on", "off"):
+            is_off = 0 if action == "on" else 1
+            ok = asyncio.run(self._device.update_zone(  # type: ignore[union-attr]
+                zone_nr, zone_name,
+                is_off=is_off, set_temp=cur_setpoint, is_crono=cur_crono,
+                timeout=8.0,
+            ))
+            if ok:
+                lbl = C.green("ON") if action == "on" else C.red("OFF")
+                print(f"  {C.green('✓')} Zone {zone_nr} ({zone_name}) → {lbl}")
+            else:
+                print(f"  {C.red('✗')} Command timed out.")
+            return
+
+        if action == "temp":
+            if len(parts) < 3:
+                print("  Usage: zone <nr> temp <°C>  (e.g. zone 1 temp 21.5)")
+                return
+            try:
+                temp = float(parts[2])
+            except ValueError:
+                print(f"  {C.yellow('!')} Temperature must be a number (e.g. 21.5).")
+                return
+            ok = asyncio.run(self._device.update_zone(  # type: ignore[union-attr]
+                zone_nr, zone_name,
+                is_off=cur_is_off, set_temp=temp, is_crono=cur_crono,
+                timeout=8.0,
+            ))
+            if ok:
+                print(f"  {C.green('✓')} Zone {zone_nr} ({zone_name}) setpoint → {temp:.1f} °C")
+            else:
+                print(f"  {C.red('✗')} Command timed out.")
+            return
+
+        if action == "crono":
+            if len(parts) < 3 or parts[2].lower() not in ("on", "off"):
+                print("  Usage: zone <nr> crono on|off")
+                return
+            is_crono = 1 if parts[2].lower() == "on" else 0
+            ok = asyncio.run(self._device.update_zone(  # type: ignore[union-attr]
+                zone_nr, zone_name,
+                is_off=cur_is_off, set_temp=cur_setpoint, is_crono=is_crono,
+                timeout=8.0,
+            ))
+            if ok:
+                clbl = C.green("on") if is_crono else C.dim("off")
+                print(f"  {C.green('✓')} Zone {zone_nr} ({zone_name}) schedule → {clbl}")
+            else:
+                print(f"  {C.red('✗')} Command timed out.")
+            return
+
+        if action == "fan":
+            if len(parts) < 3 or not parts[2].lstrip("-").isdigit():
+                print("  Usage: zone <nr> fan <n>")
+                return
+            fan_speed = int(parts[2])
+            ok = asyncio.run(self._device.update_zone(  # type: ignore[union-attr]
+                zone_nr, zone_name,
+                is_off=cur_is_off, set_temp=cur_setpoint, is_crono=cur_crono,
+                fan_set=fan_speed, timeout=8.0,
+            ))
+            if ok:
+                print(f"  {C.green('✓')} Zone {zone_nr} ({zone_name}) fan → {fan_speed}")
+            else:
+                print(f"  {C.red('✗')} Command timed out.")
+            return
+
+        print(f"  {C.yellow('!')} Unknown action: {action!r}")
+        print("  Usage: zone <nr> on|off|temp <°C>|crono on|off|fan <n>")
 
     def do_pin(self, arg: str) -> None:
         """pin [<value> | forget | list]  —  manage per-device PINs.

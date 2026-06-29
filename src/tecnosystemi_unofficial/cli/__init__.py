@@ -163,6 +163,28 @@ def main(argv: Optional[list[str]] = None) -> None:
     p_night = sub.add_parser("night", help="Set night mode on|off (Pico only)")
     p_night.add_argument("state", choices=["on", "off"])
 
+    p_zone = sub.add_parser(
+        "zone",
+        help="Control a single zone (Polaris 5X only)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Per-zone control for Polaris 5X devices.\n\n"
+            "Actions:\n"
+            "  on|off              Turn zone on or off\n"
+            "  temp <°C>           Set temperature setpoint (e.g. zone 1 temp 21.5)\n"
+            "  crono on|off        Enable / disable schedule mode\n"
+            "  fan <n>             Set fan coil speed"
+        ),
+    )
+    p_zone.add_argument("zone_id", metavar="ZONE_ID", help="Zone numeric ID or name (e.g. 1 or CUCINA)")
+    p_zone.add_argument(
+        "action",
+        choices=["on", "off", "temp", "crono", "fan"],
+        metavar="ACTION",
+        help="on | off | temp | crono | fan",
+    )
+    p_zone.add_argument("value", nargs="?", metavar="VALUE")
+
     args = parser.parse_args(argv)
     session = SessionState.load()
 
@@ -289,6 +311,93 @@ def main(argv: Optional[list[str]] = None) -> None:
             else:
                 print(f"{C.red('✗')} Timed out.")
                 sys.exit(2)
+
+        elif args.cmd == "zone":
+            if not is_polaris5x:
+                print(f"  {C.yellow('!')} 'zone' is only supported for Polaris 5X.", file=sys.stderr)
+                sys.exit(1)
+            from ._repl import _parse_setpoint, _find_zone, _zones_available, _zone_nr, _zone_name
+
+            print("Fetching state …")
+            state = asyncio.run(device.get_state(timeout=10.0))
+            if state is None:
+                print(f"{C.red('✗')} No response from device.", file=sys.stderr)
+                sys.exit(2)
+
+            zones = state.get("zone") or state.get("z") or []
+            zone = _find_zone(zones, args.zone_id)
+            if zone is None:
+                print(f"{C.red('✗')} Zone {args.zone_id!r} not found. Available: {_zones_available(zones)}", file=sys.stderr)
+                sys.exit(1)
+
+            zone_nr = _zone_nr(zone)
+            zone_name = _zone_name(zone)
+            cur_setpoint = _parse_setpoint(zone.get("t_set", zone.get("ts"))) or 20.0
+            cur_is_off = zone.get("is_off", zone.get("off", 0))
+            cur_crono = zone.get("is_crono", 0)
+            action = args.action
+
+            if action in ("on", "off"):
+                is_off = 0 if action == "on" else 1
+                ok = asyncio.run(device.update_zone(  # type: ignore[union-attr]
+                    zone_nr, zone_name,
+                    is_off=is_off, set_temp=cur_setpoint, is_crono=cur_crono,
+                ))
+                if ok:
+                    print(f"{C.green('✓')} Zone {zone_nr} ({zone_name}) → {'ON' if action == 'on' else 'OFF'}")
+                else:
+                    print(f"{C.red('✗')} Timed out.", file=sys.stderr)
+                    sys.exit(2)
+
+            elif action == "temp":
+                if not args.value:
+                    print(f"{C.red('✗')} Usage: zone <nr> temp <°C>", file=sys.stderr)
+                    sys.exit(1)
+                try:
+                    temp = float(args.value)
+                except ValueError:
+                    print(f"{C.red('✗')} Temperature must be a number.", file=sys.stderr)
+                    sys.exit(1)
+                ok = asyncio.run(device.update_zone(  # type: ignore[union-attr]
+                    zone_nr, zone_name,
+                    is_off=cur_is_off, set_temp=temp, is_crono=cur_crono,
+                ))
+                if ok:
+                    print(f"{C.green('✓')} Zone {zone_nr} ({zone_name}) setpoint → {temp:.1f} °C")
+                else:
+                    print(f"{C.red('✗')} Timed out.", file=sys.stderr)
+                    sys.exit(2)
+
+            elif action == "crono":
+                if not args.value or args.value.lower() not in ("on", "off"):
+                    print(f"{C.red('✗')} Usage: zone <nr> crono on|off", file=sys.stderr)
+                    sys.exit(1)
+                is_crono = 1 if args.value.lower() == "on" else 0
+                ok = asyncio.run(device.update_zone(  # type: ignore[union-attr]
+                    zone_nr, zone_name,
+                    is_off=cur_is_off, set_temp=cur_setpoint, is_crono=is_crono,
+                ))
+                if ok:
+                    print(f"{C.green('✓')} Zone {zone_nr} ({zone_name}) schedule → {args.value}")
+                else:
+                    print(f"{C.red('✗')} Timed out.", file=sys.stderr)
+                    sys.exit(2)
+
+            elif action == "fan":
+                if not args.value or not args.value.lstrip("-").isdigit():
+                    print(f"{C.red('✗')} Usage: zone <nr> fan <n>", file=sys.stderr)
+                    sys.exit(1)
+                fan_speed = int(args.value)
+                ok = asyncio.run(device.update_zone(  # type: ignore[union-attr]
+                    zone_nr, zone_name,
+                    is_off=cur_is_off, set_temp=cur_setpoint, is_crono=cur_crono,
+                    fan_set=fan_speed,
+                ))
+                if ok:
+                    print(f"{C.green('✓')} Zone {zone_nr} ({zone_name}) fan → {fan_speed}")
+                else:
+                    print(f"{C.red('✗')} Timed out.", file=sys.stderr)
+                    sys.exit(2)
 
     finally:
         client.stop()

@@ -195,12 +195,12 @@ class Polaris5XDevice:
             "is_crono": is_crono,
             "pin": self.pin,
         }
-        if fan_set is not None and fan_set != -1:
-            cmd["fan_set"] = fan_set
-            cmd["shu_set"] = fan_set
-        elif shu_set is not None and shu_set != -1:
-            cmd["shu_set"] = shu_set
-            cmd["fan_set"] = shu_set
+        # The protocol always requires fan_set and shu_set together and uses
+        # the same value for both (mirrors Java update_ZONA_Command logic).
+        combined = fan_set if fan_set is not None else shu_set
+        if combined is not None and combined != -1:
+            cmd["fan_set"] = combined
+            cmd["shu_set"] = combined
 
         result = await self.client.send_command(cmd, timeout=timeout)
         return result is not None

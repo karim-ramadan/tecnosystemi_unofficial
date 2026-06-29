@@ -52,6 +52,8 @@ Running `tecno` opens a persistent REPL session. The prompt shows the active dev
 
 ### Commands
 
+The `help` command (or just `help <command>`) shows only the commands relevant to the active device type.
+
 | Command | Pico | Polaris 5X | Description |
 |---------|:----:|:----------:|-------------|
 | `discover` | ✓ | ✓ | Broadcast discovery; auto-connects if one device found |
@@ -66,9 +68,10 @@ Running `tecno` opens a persistent REPL session. The prompt shows the active dev
 | `mode [value]` | ✓ | ✓ | Set operating mode (different values per device type) |
 | `humidity <0-100>` | ✓ | — | Set target humidity (%) |
 | `night [on\|off]` | ✓ | — | Toggle night mode |
+| `zone …` | — | ✓ | Per-zone control (see below) |
 | `pin` | ✓ | ✓ | Show / set / forget stored PIN |
 | `check_pin` | ✓ | ✓ | Validate stored PIN against device |
-| `debug [on\|off]` | ✓ | ✓ | Toggle raw UDP packet logging |
+| `debug [on\|off]` | ✓ | ✓ | Toggle raw packet logging |
 | `quit` / `exit` | ✓ | ✓ | Exit the REPL |
 
 ### Switching device type in the REPL
@@ -128,6 +131,48 @@ Running `mode` without an argument shows an interactive numbered menu tailored t
 | 2 | Deumidificazione | Dehumidification mode |
 | 3 | Ventilazione | Ventilation only (no heating or cooling) |
 
+## Polaris 5X Zone Control
+
+The `zone` command lets you inspect and update individual zones.
+
+### REPL
+
+```
+  (tecno/polaris5x 192.168.1.100) > zone
+  [1] Soggiorno            [ON ]  T=21.2°C  SP=21.0°C  fan=2
+  [2] Camera               [OFF]  T=19.5°C  SP=20.0°C
+
+  (tecno/polaris5x 192.168.1.100) > zone 1
+  Zone 1 — Soggiorno
+  Power                ON
+  Temperature          21.2 °C
+  Setpoint             21.0 °C
+  Fan coil             2  (setpoint: 2)
+  Schedule             off
+
+  (tecno/polaris5x 192.168.1.100) > zone 1 temp 22
+  ✓ Zone 1 (Soggiorno) setpoint → 22.0 °C
+
+  (tecno/polaris5x 192.168.1.100) > zone 2 on
+  ✓ Zone 2 (Camera) → ON
+
+  (tecno/polaris5x 192.168.1.100) > zone 1 crono on
+  ✓ Zone 1 (Soggiorno) schedule → on
+
+  (tecno/polaris5x 192.168.1.100) > zone 1 fan 3
+  ✓ Zone 1 (Soggiorno) fan → 3
+```
+
+### Non-interactive
+
+```bash
+tecno --type polaris5x --ip 192.168.1.100 zone 1 on
+tecno --type polaris5x --ip 192.168.1.100 zone 1 off
+tecno --type polaris5x --ip 192.168.1.100 zone 1 temp 21.5
+tecno --type polaris5x --ip 192.168.1.100 zone 2 crono on
+tecno --type polaris5x --ip 192.168.1.100 zone 1 fan 2
+```
+
 ## Per-Device PINs
 
 Each device PIN is stored separately in `~/.tecno/config.json`.
@@ -178,8 +223,10 @@ tecno --ip 192.168.1.16 --pin 1234 on
 tecno --type polaris5x --ip 192.168.1.100 state
 tecno --type polaris5x --ip 192.168.1.100 on
 tecno --type polaris5x --ip 192.168.1.100 off
-tecno --type polaris5x --ip 192.168.1.100 mode 1   # cooling
-tecno --type polaris5x --ip 192.168.1.100 set m_crono=1
+tecno --type polaris5x --ip 192.168.1.100 mode 1        # cooling
+tecno --type polaris5x --ip 192.168.1.100 zone 1 on
+tecno --type polaris5x --ip 192.168.1.100 zone 1 temp 21.5
+tecno --type polaris5x --ip 192.168.1.100 zone 2 crono on
 ```
 
 If `--ip` is omitted, the last remembered device is used.
