@@ -183,6 +183,16 @@ def run(args: argparse.Namespace, session: SessionState, device_type: str) -> No
                 print(f"{C.red('✗')} Timed out.")
                 sys.exit(2)
 
+        elif args.cmd == "temp":
+            if not is_polaris5x:
+                print(f"  {C.yellow('!')} 'temp' is only supported for Polaris 5X.", file=sys.stderr)
+                sys.exit(1)
+            if asyncio.run(device.set_canal_temperature(args.value)):  # type: ignore[union-attr]
+                print(f"{C.green('✓')} Canal setpoint → {args.value:.1f} °C")
+            else:
+                print(f"{C.red('✗')} Timed out.")
+                sys.exit(2)
+
         elif args.cmd == "zone":
             _run_zone(args, device, is_polaris5x)  # type: ignore[arg-type]
 

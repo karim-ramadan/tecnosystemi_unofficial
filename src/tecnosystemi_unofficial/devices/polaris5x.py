@@ -148,6 +148,15 @@ class Polaris5XDevice:
             overrides = {"is_off": 0, "is_cool": 1, "cool_mod": mode}
         return await self._upd_cu(overrides, timeout=timeout)
 
+    async def set_canal_temperature(self, temp: float, timeout: Optional[float] = None) -> bool:
+        """
+        Set the CU canal temperature setpoint.
+
+        Args:
+            temp: Target temperature in °C (e.g. 21.5).
+        """
+        return await self._upd_cu({"t_can": round(temp * 10)}, timeout=timeout)
+
     async def update(self, timeout: Optional[float] = None, **fields) -> bool:
         """
         Low-level: send arbitrary ``upd_cu`` fields.

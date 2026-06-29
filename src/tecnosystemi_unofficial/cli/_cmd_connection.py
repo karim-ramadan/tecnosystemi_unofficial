@@ -166,10 +166,11 @@ class ConnectionCommands:
 
         if dtype != "pico":
             print(f"  {C.bold('Polaris 5X-only:')}")
+            row("temp <°C>", "Set CU canal setpoint  (e.g. temp 21.5)")
             row("zone", "List all zones with state")
             row("zone <id>", "Show detailed zone state")
             row("zone <id> on|off", "Turn zone on / off")
-            row("zone <id> temp <°C>", "Set temperature setpoint  (e.g. zone 1 temp 21.5)")
+            row("zone <id> temp <°C>", "Set zone temperature setpoint")
             row("zone <id> crono on|off", "Enable / disable schedule mode")
             row("zone <id> fan <n>", "Set fan coil speed")
             print()

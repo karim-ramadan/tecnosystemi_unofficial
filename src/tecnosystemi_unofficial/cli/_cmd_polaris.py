@@ -1,4 +1,4 @@
-"""Polaris 5X-only REPL commands: zone."""
+"""Polaris 5X-only REPL commands: temp, zone."""
 from __future__ import annotations
 
 import asyncio
@@ -17,6 +17,34 @@ from ._display_polaris import (
 
 class PolarisCommands:
     """Mixin: commands only applicable to Polaris 5X multi-zone HVAC units."""
+
+    def do_temp(self, arg: str) -> None:
+        """temp <°C>  —  set the CU canal temperature setpoint (Polaris 5X only).
+
+        Example:
+          temp 21.5
+        """
+        if not self._require_device():  # type: ignore[attr-defined]
+            return
+        if not self._is_polaris5x():  # type: ignore[attr-defined]
+            print(f"  {C.yellow('!')} 'temp' is only available for Polaris 5X.")
+            return
+        if not self._ensure_pin():  # type: ignore[attr-defined]
+            return
+        arg = arg.strip()
+        if not arg:
+            print("  Usage: temp <°C>  (e.g. temp 21.5)")
+            return
+        try:
+            temp = float(arg)
+        except ValueError:
+            print(f"  {C.yellow('!')} Temperature must be a number (e.g. 21.5).")
+            return
+        ok = asyncio.run(self._device.set_canal_temperature(temp))  # type: ignore[attr-defined]
+        if ok:
+            print(f"  {C.green('✓')} Canal setpoint → {temp:.1f} °C")
+        else:
+            print(f"  {C.red('✗')} Command timed out.")
 
     def do_zone(self, arg: str) -> None:
         """zone [<id> [on|off|temp <°C>|crono on|off|fan <n>]]  —  per-zone control (Polaris 5X only).

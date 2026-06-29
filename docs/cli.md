@@ -68,6 +68,7 @@ The `help` command (or just `help <command>`) shows only the commands relevant t
 | `mode [value]` | ✓ | ✓ | Set operating mode (different values per device type) |
 | `humidity <0-100>` | ✓ | — | Set target humidity (%) |
 | `night [on\|off]` | ✓ | — | Toggle night mode |
+| `temp <°C>` | — | ✓ | Set CU canal temperature setpoint |
 | `zone …` | — | ✓ | Per-zone control (see below) |
 | `pin` | ✓ | ✓ | Show / set / forget stored PIN |
 | `check_pin` | ✓ | ✓ | Validate stored PIN against device |
@@ -130,6 +131,23 @@ Running `mode` without an argument shows an interactive numbered menu tailored t
 | 1 | Raffrescamento | Cooling mode |
 | 2 | Deumidificazione | Dehumidification mode |
 | 3 | Ventilazione | Ventilation only (no heating or cooling) |
+
+## Polaris 5X Canal Temperature
+
+The `temp` command sets the central unit (CU) canal temperature setpoint — the target temperature for the whole system, independent of individual zone setpoints.
+
+### REPL
+
+```
+(tecno/polaris5x 192.168.1.100) > temp 21.5
+✓ Canal setpoint → 21.5 °C
+```
+
+### Non-interactive
+
+```bash
+tecno --type polaris5x --ip 192.168.1.100 temp 21.5
+```
 
 ## Polaris 5X Zone Control
 
@@ -224,6 +242,7 @@ tecno --type polaris5x --ip 192.168.1.100 state
 tecno --type polaris5x --ip 192.168.1.100 on
 tecno --type polaris5x --ip 192.168.1.100 off
 tecno --type polaris5x --ip 192.168.1.100 mode 1        # cooling
+tecno --type polaris5x --ip 192.168.1.100 temp 21.5     # CU canal setpoint
 tecno --type polaris5x --ip 192.168.1.100 zone 1 on
 tecno --type polaris5x --ip 192.168.1.100 zone 1 temp 21.5
 tecno --type polaris5x --ip 192.168.1.100 zone 2 crono on

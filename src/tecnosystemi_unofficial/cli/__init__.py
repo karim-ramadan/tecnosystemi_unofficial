@@ -100,6 +100,9 @@ def main(argv: Optional[list[str]] = None) -> None:
     p_night = sub.add_parser("night", help="Set night mode on|off (Pico only)")
     p_night.add_argument("state", choices=["on", "off"])
 
+    p_temp = sub.add_parser("temp", help="Set CU canal temperature setpoint in °C (Polaris 5X only)")
+    p_temp.add_argument("value", type=float, metavar="TEMP")
+
     p_zone = sub.add_parser(
         "zone",
         help="Control a single zone (Polaris 5X only)",
