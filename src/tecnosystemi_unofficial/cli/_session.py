@@ -29,6 +29,7 @@ class SessionState:
 
     ip: str = ""
     debug: bool = False
+    device_type: str = "pico"
     device_pins: dict = field(default_factory=dict)
 
     # ------------------------------------------------------------------
@@ -58,6 +59,7 @@ class SessionState:
         data = {
             "ip": self.ip,
             "debug": self.debug,
+            "device_type": self.device_type,
             "device_pins": self.device_pins,
         }
         CONFIG_FILE.write_text(json.dumps(data, indent=2))
@@ -76,6 +78,7 @@ class SessionState:
         obj = cls(
             ip=data.get("ip", ""),
             debug=bool(data.get("debug", False)),
+            device_type=data.get("device_type", "pico"),
             device_pins=dict(data.get("device_pins", {})),
         )
 
