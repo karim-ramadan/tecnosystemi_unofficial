@@ -1,6 +1,6 @@
 [project]
 name = "tecnosystemi-unofficial"
-version = "0.6.0"
+version = "1.0.0"
 description = "Unofficial Python library for controlling Tecnosystemi devices (Pico, etc.) via UDP"
 readme = "README.md"
 license = { text = "MIT" }
